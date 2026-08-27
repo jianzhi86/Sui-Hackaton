@@ -1,0 +1,129 @@
+import { useState, type FormEvent } from 'react';
+import { useCurrentAccount } from '@mysten/dapp-kit';
+import { Transaction } from '@mysten/sui/transactions';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
+import { useSignAndExecute } from '../lib/useSignAndExecute';
+import { QrScanButton } from './QrScanButton';
+import { extractBatchId } from '../lib/qr';
+
+const ROLES = ['distributor', 'pharmacy', 'other'];
+
+export function CheckpointScanner() {
+  const account = useCurrentAccount();
+  const { mutate: signAndExecute, isPending } = useSignAndExecute();
+
+  const [batchId, setBatchId] = useState('');
+  const [role, setRole] = useState(ROLES[0]);
+  const [location, setLocation] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+
+    if (!batchId.trim() || !location.trim()) {
+      setError('Batch object ID and location are both required.');
+      return;
+    }
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: target('add_checkpoint'),
+      arguments: [
+        tx.object(batchId.trim()),
+        tx.pure.string(role),
+        tx.pure.string(location.trim()),
+        tx.pure.string(note.trim()),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
+      {
+        onSuccess: (result) => {
+          setSuccess(`Checkpoint recorded. Transaction digest: ${result.digest}`);
+          setLocation('');
+          setNote('');
+        },
+        onError: (err) => setError(err.message),
+      },
+    );
+  }
+
+  return (
+    <section className="panel">
+      <h2>Scan a checkpoint</h2>
+      <p className="panel-intro">
+        Called by whoever is taking custody of the batch right now — a distributor receiving a
+        shipment, or a pharmacy stocking it. Your connected wallet address is recorded
+        automatically as the actor; it can't be typed over or spoofed from this form.
+      </p>
+
+      {!account && <p className="error-text">Connect a wallet to record a checkpoint.</p>}
+      {error && <p className="error-text">{error}</p>}
+      {success && <p className="success-banner">{success}</p>}
+
+      <QrScanButton onDecoded={(text) => setBatchId(extractBatchId(text))} />
+
+      <form onSubmit={handleSubmit}>
+        <div className="field">
+          <label htmlFor="batchId">Batch object ID</label>
+          <input
+            id="batchId"
+            value={batchId}
+            onChange={(e) => setBatchId(e.target.value)}
+            placeholder="0x… (scan the batch's QR code, or paste manually)"
+            disabled={!account || isPending}
+          />
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <label htmlFor="role">Your role</label>
+            <select
+              id="role"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              disabled={!account || isPending}
+            >
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="location">Location</label>
+            <input
+              id="location"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="e.g. KL Distribution Hub"
+              disabled={!account || isPending}
+            />
+          </div>
+        </div>
+
+        <div className="field">
+          <label htmlFor="note">Note (optional)</label>
+          <textarea
+            id="note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Received, seal intact"
+            disabled={!account || isPending}
+          />
+        </div>
+
+        <button type="submit" className="btn btn-primary" disabled={!account || isPending}>
+          {isPending ? 'Recording on-chain…' : 'Record checkpoint'}
+        </button>
+      </form>
+    </section>
+  );
+}
