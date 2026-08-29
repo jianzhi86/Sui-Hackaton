@@ -17,18 +17,24 @@
 /// `DistributorCap` capability object) is a natural next step — see the
 /// README for where that would plug in.
 ///
-/// Placing/releasing a hold IS capability-gated (unlike `add_checkpoint`):
-/// a hold is a much stronger action — it freezes the whole custody chain —
-/// so it requires a `RegulatorCap` object rather than just an address. One
-/// `RegulatorCap` is minted to the package deployer at publish time; that
-/// holder (or anyone they choose to mint a cap for) can then place holds.
+/// Placing/releasing a hold IS access-gated (unlike `add_checkpoint`): a
+/// hold is a much stronger action — it freezes the whole custody chain and
+/// blocks sales — so it requires the caller's address to be listed in the
+/// shared `RegulatorRegistry`. This is deliberately an address allow-list,
+/// not a bearer capability object: a capability object (like the earlier
+/// version of this module used) can never be taken back once handed out —
+/// whoever holds it holds it forever, even after they leave the job or the
+/// key leaks. An allow-list can be revoked. One `AdminCap` is minted to the
+/// package deployer at publish time; only that holder can add or revoke
+/// regulator addresses via `admin_add_regulator` / `admin_revoke_regulator`.
 ///
-/// A hold carries a `severity` classification (`SEVERITY_*`), a mandatory
-/// `case_reference` for cross-referencing off-chain paperwork, and — on
-/// release — a mandatory `release_note`. All three are required inputs,
-/// not optional metadata: a regulatory hold with no severity, no case to
-/// point back to, or no stated reason for lifting it isn't a usable audit
-/// record, just a flag that got flipped twice.
+/// A hold carries a `severity` classification (`SEVERITY_*`), a `category`
+/// classification (`CATEGORY_*`), a mandatory `case_reference` for
+/// cross-referencing off-chain paperwork, and — on release — a mandatory
+/// `release_note`. None of these are optional metadata: a regulatory hold
+/// with no severity, no category, no case to point back to, or no stated
+/// reason for lifting it isn't a usable audit record, just a flag that got
+/// flipped twice.
 ///
 /// A hold also gates sales, not just custody: `mint_unit` and
 /// `purchase_and_burn` both abort while `is_held` is true. Without this, a
@@ -38,10 +44,10 @@
 ///
 /// `SEVERITY_CRITICAL` holds cannot be released by a single signer.
 /// `release_hold` aborts for them; releasing one requires `propose_release`
-/// from one `RegulatorCap` holder followed by `confirm_release` from a
-/// *different* one. This mirrors how real recalls work: one person can
-/// pull the emergency brake alone, but nobody unilaterally decides a
-/// critical stop-sale is over.
+/// from one regulator followed by `confirm_release` from a *different*
+/// one. This mirrors how real recalls work: one person can pull the
+/// emergency brake alone, but nobody unilaterally decides a critical
+/// stop-sale is over.
 module pharma_track::batch;
 
 use std::option::{Self, Option};
@@ -50,6 +56,7 @@ use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
 use sui::event;
 use sui::sui::SUI;
+use sui::vec_set::{Self, VecSet};
 
 /// A single custody event in a batch's lifecycle.
 public struct Checkpoint has copy, drop, store {
@@ -76,6 +83,12 @@ public struct HoldRecord has copy, drop, store {
     /// which a single free-text reason can't do consistently across
     /// different regulators writing their own wording.
     severity: u8,
+    /// What kind of problem this is — see the `CATEGORY_*` constants.
+    /// Separate from severity (how urgent) and from the free-text reason
+    /// (narrative detail): this is the structured field that makes holds
+    /// filterable/reportable instead of every regulator inventing their
+    /// own wording for "counterfeit" vs. "labeling error" vs. etc.
+    category: u8,
     /// External case/investigation reference (e.g. a regulator's own
     /// ticket number), so this on-chain record can be cross-referenced
     /// against off-chain paperwork instead of standing alone.
@@ -108,6 +121,7 @@ public struct Batch has key {
     is_held: bool,
     hold_reason: String,
     hold_severity: u8,
+    hold_category: u8,
     hold_case_reference: String,
     held_by: address,
     held_at_ms: u64,
@@ -122,11 +136,23 @@ public struct Batch has key {
     pending_release_note: Option<String>,
 }
 
-/// Capability required to place or release a hold on a batch. Minted once
-/// to the deployer at publish time; holders can mint further caps via
-/// `mint_regulator_cap` to onboard other regulators/pharmacies.
-public struct RegulatorCap has key, store {
+/// Capability held by whoever can add/revoke regulator addresses in a
+/// `RegulatorRegistry`. Minted once to the deployer at publish time.
+/// Unlike the registry membership it controls, this itself is a bearer
+/// capability with no revocation path — a real deployment would want a
+/// multisig or a second `AdminCap` holder as a backup, since losing this
+/// object means nobody can ever change the regulator list again.
+public struct AdminCap has key, store {
     id: UID,
+}
+
+/// The shared allow-list of addresses that can place/release holds.
+/// Membership is checked by address, not by object possession — that's
+/// what makes revocation possible: `admin_revoke_regulator` just removes
+/// an entry, no need to claw back an object from someone else's wallet.
+public struct RegulatorRegistry has key {
+    id: UID,
+    regulators: VecSet<address>,
 }
 
 /// One physical, sellable dose/pack of a batch, represented as its own
@@ -149,7 +175,12 @@ public struct Unit has key {
 }
 
 fun init(ctx: &mut TxContext) {
-    transfer::transfer(RegulatorCap { id: object::new(ctx) }, ctx.sender());
+    let sender = ctx.sender();
+    transfer::transfer(AdminCap { id: object::new(ctx) }, sender);
+
+    let mut regulators = vec_set::empty<address>();
+    regulators.insert(sender);
+    transfer::share_object(RegulatorRegistry { id: object::new(ctx), regulators });
 }
 
 #[test_only]
@@ -160,7 +191,10 @@ public fun test_init(ctx: &mut TxContext) {
 // ===== Events =====
 // The frontend listens to these instead of polling full objects, and the
 // public lookup page can replay them to reconstruct history for an object
-// even before it reads the object's current fields.
+// even before it reads the object's current fields. `BatchHeld` /
+// `BatchReleased` in particular are what the public "Active Holds"
+// dashboard is built from — it queries these directly rather than needing
+// to already know every Batch object ID in existence.
 
 public struct BatchCreated has copy, drop {
     batch_id: address,
@@ -184,6 +218,7 @@ public struct BatchHeld has copy, drop {
     held_by: address,
     reason: String,
     severity: u8,
+    category: u8,
     case_reference: String,
     held_at_ms: u64,
 }
@@ -243,6 +278,10 @@ const ECriticalRequiresMultisig: u64 = 12;
 const EReleaseAlreadyProposed: u64 = 13;
 const ENoReleaseProposed: u64 = 14;
 const ESameRegulatorCannotConfirm: u64 = 15;
+const ENotRegulator: u64 = 16;
+const EAlreadyRegulator: u64 = 17;
+const ENotCurrentRegulator: u64 = 18;
+const EInvalidCategory: u64 = 19;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -252,6 +291,17 @@ const ESameRegulatorCannotConfirm: u64 = 15;
 const SEVERITY_ADVISORY: u8 = 1;
 const SEVERITY_RECALL: u8 = 2;
 const SEVERITY_CRITICAL: u8 = 3;
+
+/// Structured hold categories — what kind of problem this is, orthogonal
+/// to severity (how urgent) and to the free-text reason (narrative
+/// detail). Fixed taxonomy rather than free text so holds are filterable
+/// and reportable instead of every regulator wording the same underlying
+/// problem differently.
+const CATEGORY_COUNTERFEIT: u8 = 1;
+const CATEGORY_QUALITY_DEFECT: u8 = 2;
+const CATEGORY_LABELING_ERROR: u8 = 3;
+const CATEGORY_COLD_CHAIN_BREACH: u8 = 4;
+const CATEGORY_OTHER: u8 = 5;
 
 /// How long a `Unit` stays redeemable after minting, in milliseconds
 /// (10 minutes). Short on purpose: a `Unit` is meant to be minted at the
@@ -293,6 +343,7 @@ public entry fun create_batch(
         is_held: false,
         hold_reason: string::utf8(b""),
         hold_severity: 0,
+        hold_category: 0,
         hold_case_reference: string::utf8(b""),
         held_by: @0x0,
         held_at_ms: 0,
@@ -427,36 +478,48 @@ public entry fun purchase_and_burn(
 }
 
 /// Place a hold on a batch — freezes the custody chain (no further
-/// checkpoints can be added) until someone releases it. Requires a
-/// `RegulatorCap`; the caller's address is also permanently attributed as
-/// `held_by` on top of that capability check.
+/// checkpoints can be added) until someone releases it. Requires the
+/// caller's address to be listed in `registry`; the caller's address is
+/// also permanently attributed as `held_by` on top of that access check.
 ///
-/// `severity` must be one of the `SEVERITY_*` constants, and both `reason`
-/// and `case_reference` are mandatory — a hold with no classification or
-/// no external case number to cross-reference isn't useful evidence later.
+/// `severity` must be one of the `SEVERITY_*` constants, `category` one
+/// of the `CATEGORY_*` constants, and both `reason` and `case_reference`
+/// are mandatory — a hold with no classification, no category, or no
+/// external case number to cross-reference isn't useful evidence later.
 public entry fun place_hold(
-    _cap: &RegulatorCap,
+    registry: &RegulatorRegistry,
     batch: &mut Batch,
     reason: vector<u8>,
     severity: u8,
+    category: u8,
     case_reference: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    let sender = ctx.sender();
+    assert!(registry.regulators.contains(&sender), ENotRegulator);
     assert!(!batch.is_held, EBatchHeld);
     assert!(reason.length() > 0, EEmptyHoldReason);
     assert!(
         severity == SEVERITY_ADVISORY || severity == SEVERITY_RECALL || severity == SEVERITY_CRITICAL,
         EInvalidSeverity,
     );
+    assert!(
+        category == CATEGORY_COUNTERFEIT
+            || category == CATEGORY_QUALITY_DEFECT
+            || category == CATEGORY_LABELING_ERROR
+            || category == CATEGORY_COLD_CHAIN_BREACH
+            || category == CATEGORY_OTHER,
+        EInvalidCategory,
+    );
     assert!(case_reference.length() > 0, EEmptyCaseReference);
 
-    let sender = ctx.sender();
     let now = clock.timestamp_ms();
 
     batch.is_held = true;
     batch.hold_reason = string::utf8(reason);
     batch.hold_severity = severity;
+    batch.hold_category = category;
     batch.hold_case_reference = string::utf8(case_reference);
     batch.held_by = sender;
     batch.held_at_ms = now;
@@ -465,6 +528,7 @@ public entry fun place_hold(
         held_by: sender,
         reason: batch.hold_reason,
         severity,
+        category,
         case_reference: batch.hold_case_reference,
         held_at_ms: now,
         released_by: option::none(),
@@ -478,32 +542,35 @@ public entry fun place_hold(
         held_by: sender,
         reason: batch.hold_reason,
         severity,
+        category,
         case_reference: batch.hold_case_reference,
         held_at_ms: now,
     });
 }
 
 /// Release a previously placed hold, unfreezing the custody chain.
-/// Requires a `RegulatorCap` — not necessarily the same one that placed
-/// the hold, since caps are fungible proof of role, not per-hold tickets.
-/// `release_note` is mandatory: "who released it and when" without "why
-/// it was safe to" is an audit gap, not a complete record.
+/// Requires the caller to be a listed regulator — not necessarily the one
+/// that placed the hold, since registry membership is proof of role, not
+/// a per-hold ticket. `release_note` is mandatory: "who released it and
+/// when" without "why it was safe to" is an audit gap, not a complete
+/// record.
 ///
 /// Aborts for `SEVERITY_CRITICAL` holds — those require two different
 /// signers via `propose_release` + `confirm_release` instead. See the
 /// module doc comment for why.
 public entry fun release_hold(
-    _cap: &RegulatorCap,
+    registry: &RegulatorRegistry,
     batch: &mut Batch,
     release_note: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    let sender = ctx.sender();
+    assert!(registry.regulators.contains(&sender), ENotRegulator);
     assert!(batch.is_held, EBatchNotHeld);
     assert!(batch.hold_severity != SEVERITY_CRITICAL, ECriticalRequiresMultisig);
     assert!(release_note.length() > 0, EEmptyReleaseNote);
 
-    let sender = ctx.sender();
     let now = clock.timestamp_ms();
     let note = string::utf8(release_note);
 
@@ -512,20 +579,21 @@ public entry fun release_hold(
 
 /// First signature of a critical hold's release: records who's proposing
 /// it and why, but does NOT unfreeze anything yet — `confirm_release`
-/// still has to happen, from a different `RegulatorCap` holder.
+/// still has to happen, from a different listed regulator.
 public entry fun propose_release(
-    _cap: &RegulatorCap,
+    registry: &RegulatorRegistry,
     batch: &mut Batch,
     note: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    let sender = ctx.sender();
+    assert!(registry.regulators.contains(&sender), ENotRegulator);
     assert!(batch.is_held, EBatchNotHeld);
     assert!(batch.hold_severity == SEVERITY_CRITICAL, ECriticalRequiresMultisig);
     assert!(batch.pending_release_by.is_none(), EReleaseAlreadyProposed);
     assert!(note.length() > 0, EEmptyReleaseNote);
 
-    let sender = ctx.sender();
     let now = clock.timestamp_ms();
     let note_str = string::utf8(note);
 
@@ -540,21 +608,22 @@ public entry fun propose_release(
     });
 }
 
-/// Second signature of a critical hold's release: must come from a
-/// `RegulatorCap` holder other than whoever called `propose_release`.
-/// Actually unfreezes the batch, using the note captured at proposal time
-/// — the confirming signer is vouching for that stated reason, not
-/// writing a new one, since the whole point is two people agreeing on the
-/// same justification.
+/// Second signature of a critical hold's release: must come from a listed
+/// regulator other than whoever called `propose_release`. Actually
+/// unfreezes the batch, using the note captured at proposal time — the
+/// confirming signer is vouching for that stated reason, not writing a
+/// new one, since the whole point is two people agreeing on the same
+/// justification.
 public entry fun confirm_release(
-    _cap: &RegulatorCap,
+    registry: &RegulatorRegistry,
     batch: &mut Batch,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    let sender = ctx.sender();
+    assert!(registry.regulators.contains(&sender), ENotRegulator);
     assert!(batch.pending_release_by.is_some(), ENoReleaseProposed);
 
-    let sender = ctx.sender();
     let proposer = *batch.pending_release_by.borrow();
     assert!(sender != proposer, ESameRegulatorCannotConfirm);
 
@@ -579,6 +648,7 @@ fun finish_release(
     batch.is_held = false;
     batch.hold_reason = string::utf8(b"");
     batch.hold_severity = 0;
+    batch.hold_category = 0;
     batch.hold_case_reference = string::utf8(b"");
     batch.held_by = @0x0;
     batch.held_at_ms = 0;
@@ -599,11 +669,30 @@ fun finish_release(
     });
 }
 
-/// Onboard another regulator/pharmacy by minting them a `RegulatorCap`.
-/// Only an existing cap holder can do this, so trust chains back to the
-/// original deployer — there is no way to self-mint a cap out of thin air.
-public entry fun mint_regulator_cap(_cap: &RegulatorCap, recipient: address, ctx: &mut TxContext) {
-    transfer::transfer(RegulatorCap { id: object::new(ctx) }, recipient);
+/// Onboard another regulator by adding their address to the registry.
+/// Only the `AdminCap` holder can do this — trust chains back to the
+/// original deployer, there is no way to self-add to the registry.
+public entry fun admin_add_regulator(
+    _admin: &AdminCap,
+    registry: &mut RegulatorRegistry,
+    addr: address,
+) {
+    assert!(!registry.regulators.contains(&addr), EAlreadyRegulator);
+    registry.regulators.insert(addr);
+}
+
+/// Revoke a regulator's access by removing their address from the
+/// registry. This is the entire point of the allow-list design over a
+/// bearer capability object: a compromised key or an ex-employee's access
+/// can actually be cut off, not just superseded by minting more caps
+/// while the old one remains forever valid.
+public entry fun admin_revoke_regulator(
+    _admin: &AdminCap,
+    registry: &mut RegulatorRegistry,
+    addr: address,
+) {
+    assert!(registry.regulators.contains(&addr), ENotCurrentRegulator);
+    registry.regulators.remove(&addr);
 }
 
 // ===== Read-only accessors =====
@@ -642,6 +731,8 @@ public fun hold_reason(batch: &Batch): String { batch.hold_reason }
 
 public fun hold_severity(batch: &Batch): u8 { batch.hold_severity }
 
+public fun hold_category(batch: &Batch): u8 { batch.hold_category }
+
 public fun hold_case_reference(batch: &Batch): String { batch.hold_case_reference }
 
 public fun held_by(batch: &Batch): address { batch.held_by }
@@ -655,6 +746,8 @@ public fun hold_record_held_by(r: &HoldRecord): address { r.held_by }
 public fun hold_record_reason(r: &HoldRecord): String { r.reason }
 
 public fun hold_record_severity(r: &HoldRecord): u8 { r.severity }
+
+public fun hold_record_category(r: &HoldRecord): u8 { r.category }
 
 public fun hold_record_case_reference(r: &HoldRecord): String { r.case_reference }
 
@@ -686,6 +779,26 @@ public fun severity_recall(): u8 { SEVERITY_RECALL }
 
 /// The `severity` value meaning "critical" — stop-sale, most urgent.
 public fun severity_critical(): u8 { SEVERITY_CRITICAL }
+
+public fun category_counterfeit(): u8 { CATEGORY_COUNTERFEIT }
+
+public fun category_quality_defect(): u8 { CATEGORY_QUALITY_DEFECT }
+
+public fun category_labeling_error(): u8 { CATEGORY_LABELING_ERROR }
+
+public fun category_cold_chain_breach(): u8 { CATEGORY_COLD_CHAIN_BREACH }
+
+public fun category_other(): u8 { CATEGORY_OTHER }
+
+public fun is_regulator(registry: &RegulatorRegistry, addr: address): bool {
+    registry.regulators.contains(&addr)
+}
+
+/// All currently-listed regulator addresses — lets an admin UI show who
+/// has access right now without needing to replay every add/revoke event.
+public fun regulators(registry: &RegulatorRegistry): vector<address> {
+    *registry.regulators.keys()
+}
 
 public fun unit_batch_id(unit: &Unit): address { unit.batch_id }
 

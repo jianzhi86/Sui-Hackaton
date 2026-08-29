@@ -1,7 +1,7 @@
 #[test_only]
 module pharma_track::batch_tests;
 
-use pharma_track::batch::{Self, Batch, RegulatorCap, Unit};
+use pharma_track::batch::{Self, AdminCap, Batch, RegulatorRegistry, Unit};
 use std::option;
 use std::string;
 use sui::clock;
@@ -80,11 +80,11 @@ fun test_create_batch_rejects_empty_code() {
     scenario.end();
 }
 
-/// Sets up a batch plus a `RegulatorCap` owned by MANUFACTURER (as if
-/// MANUFACTURER were the package deployer that `init` mints the first cap
-/// to), so hold/release tests don't need to touch publish-time init flow
-/// directly.
-fun setup_batch_with_cap(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>) {
+/// Sets up a batch plus a `RegulatorRegistry` (MANUFACTURER already listed,
+/// as if MANUFACTURER were the package deployer that `init` seeds the
+/// registry with) and an `AdminCap` owned by MANUFACTURER, so hold/release
+/// tests don't need to touch publish-time init flow directly.
+fun setup_batch_with_registry(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>) {
     let ctx = scenario.ctx();
     let clock = clock::create_for_testing(ctx);
     batch::test_init(ctx);
@@ -95,21 +95,22 @@ fun setup_batch_with_cap(scenario: &mut test_scenario::Scenario, batch_code: vec
 #[test]
 fun test_hold_blocks_checkpoint_then_release_allows_it() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-002");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-002");
 
-    // Regulator (holding the cap minted at "publish" time) places a hold.
+    // Regulator (MANUFACTURER, seeded into the registry at init) places a hold.
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Seal broken on arrival",
             batch::severity_recall(),
+            batch::category_quality_defect(),
             b"CASE-2026-001",
             &clock,
             ctx,
@@ -119,11 +120,12 @@ fun test_hold_blocks_checkpoint_then_release_allows_it() {
         assert!(batch::hold_reason(&shared_batch) == string::utf8(b"Seal broken on arrival"), 1);
         assert!(batch::held_by(&shared_batch) == MANUFACTURER, 2);
         assert!(batch::hold_severity(&shared_batch) == batch::severity_recall(), 6);
-        assert!(batch::hold_case_reference(&shared_batch) == string::utf8(b"CASE-2026-001"), 7);
+        assert!(batch::hold_category(&shared_batch) == batch::category_quality_defect(), 7);
+        assert!(batch::hold_case_reference(&shared_batch) == string::utf8(b"CASE-2026-001"), 8);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     // (Separately, `test_add_checkpoint_aborts_while_held` below confirms a
@@ -134,16 +136,16 @@ fun test_hold_blocks_checkpoint_then_release_allows_it() {
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
-        batch::release_hold(&cap, &mut shared_batch, b"Reseal verified against manifest", &clock, ctx);
+        batch::release_hold(&registry, &mut shared_batch, b"Reseal verified against manifest", &clock, ctx);
         assert!(!batch::is_held(&shared_batch), 3);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.next_tx(PHARMACY);
@@ -165,26 +167,27 @@ fun test_hold_blocks_checkpoint_then_release_allows_it() {
 #[test, expected_failure(abort_code = 2)]
 fun test_add_checkpoint_aborts_while_held() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-003");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-003");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Recalled by regulator",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-002",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.next_tx(PHARMACY);
@@ -201,75 +204,135 @@ fun test_add_checkpoint_aborts_while_held() {
     scenario.end();
 }
 
-// A pharmacy with no `RegulatorCap` cannot place a hold: `take_from_sender`
-// aborts because PHARMACY owns no such object. This is the capability
-// check working, not a Move framework quirk — proves the gate is real.
-#[test, expected_failure]
-fun test_place_hold_without_cap_fails() {
+// abort_code 16 == batch::ENotRegulator. PHARMACY was never added to the
+// registry, so it can't place a hold even though the registry itself is a
+// shared object anyone can pass into the call — the actual gate is the
+// address membership check inside `place_hold`, not object possession.
+#[test, expected_failure(abort_code = 16)]
+fun test_place_hold_rejects_non_regulator() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-004");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-004");
 
     scenario.next_tx(PHARMACY);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
-            b"Trying without a cap",
+            b"Trying without being a regulator",
             batch::severity_advisory(),
+            batch::category_other(),
             b"CASE-2026-003",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
 }
 
 #[test]
-fun test_mint_regulator_cap_lets_new_holder_place_hold() {
+fun test_admin_add_regulator_lets_new_holder_place_hold() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-005");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-005");
 
-    // MANUFACTURER (holding the original cap) onboards PHARMACY as a
-    // regulator too.
+    // MANUFACTURER (holding the AdminCap) onboards PHARMACY as a regulator.
     scenario.next_tx(MANUFACTURER);
     {
-        let cap = scenario.take_from_sender<RegulatorCap>();
-        let ctx = scenario.ctx();
-        batch::mint_regulator_cap(&cap, PHARMACY, ctx);
-        scenario.return_to_sender(cap);
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        batch::admin_add_regulator(&admin, &mut registry, PHARMACY);
+        assert!(batch::is_regulator(&registry, PHARMACY), 0);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
     };
 
-    // PHARMACY now holds its own cap and can place a hold.
+    // PHARMACY is now listed and can place a hold.
     scenario.next_tx(PHARMACY);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Newly-onboarded regulator hold",
             batch::severity_advisory(),
+            batch::category_labeling_error(),
             b"CASE-2026-004",
             &clock,
             ctx,
         );
-        assert!(batch::is_held(&shared_batch), 0);
-        assert!(batch::held_by(&shared_batch) == PHARMACY, 1);
+        assert!(batch::is_held(&shared_batch), 1);
+        assert!(batch::held_by(&shared_batch) == PHARMACY, 2);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_admin_revoke_regulator_blocks_further_holds() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-005B");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        batch::admin_add_regulator(&admin, &mut registry, PHARMACY);
+        batch::admin_revoke_regulator(&admin, &mut registry, PHARMACY);
+        assert!(!batch::is_regulator(&registry, PHARMACY), 0);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 17 == batch::EAlreadyRegulator.
+#[test, expected_failure(abort_code = 17)]
+fun test_admin_add_regulator_rejects_duplicate() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-005C");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        // MANUFACTURER is already a regulator (seeded at init).
+        batch::admin_add_regulator(&admin, &mut registry, MANUFACTURER);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 18 == batch::ENotCurrentRegulator.
+#[test, expected_failure(abort_code = 18)]
+fun test_admin_revoke_regulator_rejects_non_member() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-005D");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        batch::admin_revoke_regulator(&admin, &mut registry, PHARMACY);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -278,52 +341,54 @@ fun test_mint_regulator_cap_lets_new_holder_place_hold() {
 #[test]
 fun test_hold_history_records_every_cycle() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-006");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-006");
 
     // First hold+release cycle.
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"First suspected tamper",
             batch::severity_advisory(),
+            batch::category_counterfeit(),
             b"CASE-2026-005",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::release_hold(&cap, &mut shared_batch, b"False alarm, seal intact on inspection", &clock, ctx);
+        batch::release_hold(&registry, &mut shared_batch, b"False alarm, seal intact on inspection", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     // Second hold, left active (not released).
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Second, still under investigation",
             batch::severity_critical(),
+            batch::category_cold_chain_breach(),
             b"CASE-2026-006",
             &clock,
             ctx,
@@ -337,11 +402,12 @@ fun test_hold_history_records_every_cycle() {
         assert!(batch::hold_record_is_released(first), 2);
         assert!(batch::hold_record_released_by(first) == option::some(MANUFACTURER), 3);
         assert!(batch::hold_record_severity(first) == batch::severity_advisory(), 7);
-        assert!(batch::hold_record_case_reference(first) == string::utf8(b"CASE-2026-005"), 8);
+        assert!(batch::hold_record_category(first) == batch::category_counterfeit(), 8);
+        assert!(batch::hold_record_case_reference(first) == string::utf8(b"CASE-2026-005"), 9);
         assert!(
             batch::hold_record_release_note(first)
                 == option::some(string::utf8(b"False alarm, seal intact on inspection")),
-            9,
+            10,
         );
 
         let second = history.borrow(1);
@@ -351,12 +417,13 @@ fun test_hold_history_records_every_cycle() {
         );
         assert!(!batch::hold_record_is_released(second), 5);
         assert!(batch::hold_record_released_by(second) == option::none(), 6);
-        assert!(batch::hold_record_severity(second) == batch::severity_critical(), 10);
-        assert!(batch::hold_record_release_note(second) == option::none(), 11);
+        assert!(batch::hold_record_severity(second) == batch::severity_critical(), 11);
+        assert!(batch::hold_record_category(second) == batch::category_cold_chain_breach(), 12);
+        assert!(batch::hold_record_release_note(second) == option::none(), 13);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -366,19 +433,59 @@ fun test_hold_history_records_every_cycle() {
 #[test, expected_failure(abort_code = 8)]
 fun test_place_hold_rejects_invalid_severity() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-011");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-011");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         // 99 isn't one of SEVERITY_ADVISORY/RECALL/CRITICAL.
-        batch::place_hold(&cap, &mut shared_batch, b"Bad severity", 99, b"CASE-2026-007", &clock, ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Bad severity",
+            99,
+            batch::category_other(),
+            b"CASE-2026-007",
+            &clock,
+            ctx,
+        );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 19 == batch::EInvalidCategory.
+#[test, expected_failure(abort_code = 19)]
+fun test_place_hold_rejects_invalid_category() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-011B");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        // 99 isn't one of the CATEGORY_* constants.
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Bad category",
+            batch::severity_advisory(),
+            99,
+            b"CASE-2026-007B",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -388,26 +495,27 @@ fun test_place_hold_rejects_invalid_severity() {
 #[test, expected_failure(abort_code = 9)]
 fun test_place_hold_rejects_empty_case_reference() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-012");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-012");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Missing case reference",
             batch::severity_advisory(),
+            batch::category_other(),
             b"",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -417,38 +525,39 @@ fun test_place_hold_rejects_empty_case_reference() {
 #[test, expected_failure(abort_code = 10)]
 fun test_release_hold_rejects_empty_note() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-013");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-013");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Needs a release note test",
             batch::severity_advisory(),
+            batch::category_other(),
             b"CASE-2026-008",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::release_hold(&cap, &mut shared_batch, b"", &clock, ctx);
+        batch::release_hold(&registry, &mut shared_batch, b"", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -625,26 +734,27 @@ fun test_purchase_and_burn_rejects_expired_unit() {
 #[test, expected_failure(abort_code = 2)]
 fun test_mint_unit_rejects_held_batch() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-014");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-014");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Suspected counterfeit",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-009",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.next_tx(PHARMACY);
@@ -666,7 +776,7 @@ fun test_mint_unit_rejects_held_batch() {
 #[test, expected_failure(abort_code = 2)]
 fun test_purchase_and_burn_rejects_batch_held_after_mint() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-015");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-015");
 
     scenario.next_tx(PHARMACY);
     {
@@ -682,21 +792,22 @@ fun test_purchase_and_burn_rejects_batch_held_after_mint() {
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Recalled after sale QR was already minted",
             batch::severity_critical(),
+            batch::category_quality_defect(),
             b"CASE-2026-010",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.next_tx(CUSTOMER);
@@ -773,27 +884,28 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
 #[test, expected_failure(abort_code = 12)]
 fun test_release_hold_rejects_single_signer_for_critical() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-017");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-017");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Confirmed counterfeit",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-011",
             &clock,
             ctx,
         );
-        batch::release_hold(&cap, &mut shared_batch, b"Trying to release alone", &clock, ctx);
+        batch::release_hold(&registry, &mut shared_batch, b"Trying to release alone", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -802,63 +914,65 @@ fun test_release_hold_rejects_single_signer_for_critical() {
 #[test]
 fun test_propose_then_confirm_release_by_different_regulators_succeeds() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-018");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-018");
 
     // Onboard PHARMACY as a second regulator.
     scenario.next_tx(MANUFACTURER);
     {
-        let cap = scenario.take_from_sender<RegulatorCap>();
-        let ctx = scenario.ctx();
-        batch::mint_regulator_cap(&cap, PHARMACY, ctx);
-        scenario.return_to_sender(cap);
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        batch::admin_add_regulator(&admin, &mut registry, PHARMACY);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
     };
 
     // MANUFACTURER places a critical hold.
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Confirmed counterfeit",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-012",
             &clock,
             ctx,
         );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     // MANUFACTURER proposes releasing it.
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::propose_release(&cap, &mut shared_batch, b"Independent lab confirmed genuine", &clock, ctx);
+        batch::propose_release(&registry, &mut shared_batch, b"Independent lab confirmed genuine", &clock, ctx);
 
         assert!(batch::pending_release_by(&shared_batch) == option::some(MANUFACTURER), 0);
         assert!(batch::is_held(&shared_batch), 1); // still held — one signature isn't enough
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     // PHARMACY — a different regulator — confirms it.
     scenario.next_tx(PHARMACY);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::confirm_release(&cap, &mut shared_batch, &clock, ctx);
+        batch::confirm_release(&registry, &mut shared_batch, &clock, ctx);
 
         assert!(!batch::is_held(&shared_batch), 2);
         assert!(batch::pending_release_by(&shared_batch) == option::none(), 3);
@@ -875,40 +989,39 @@ fun test_propose_then_confirm_release_by_different_regulators_succeeds() {
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
 }
 
-// abort_code 15 == batch::ESameRegulatorCannotConfirm. Holding two
-// different RegulatorCap *objects* doesn't help — the check is on the
-// sender's address, since caps are fungible proof of role, not identity.
+// abort_code 15 == batch::ESameRegulatorCannotConfirm.
 #[test, expected_failure(abort_code = 15)]
 fun test_confirm_release_rejects_same_regulator() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-019");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-019");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Confirmed counterfeit",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-013",
             &clock,
             ctx,
         );
-        batch::propose_release(&cap, &mut shared_batch, b"Trying to self-confirm", &clock, ctx);
-        batch::confirm_release(&cap, &mut shared_batch, &clock, ctx);
+        batch::propose_release(&registry, &mut shared_batch, b"Trying to self-confirm", &clock, ctx);
+        batch::confirm_release(&registry, &mut shared_batch, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -918,27 +1031,28 @@ fun test_confirm_release_rejects_same_regulator() {
 #[test, expected_failure(abort_code = 14)]
 fun test_confirm_release_rejects_without_proposal() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-020");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-020");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Confirmed counterfeit",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-014",
             &clock,
             ctx,
         );
-        batch::confirm_release(&cap, &mut shared_batch, &clock, ctx);
+        batch::confirm_release(&registry, &mut shared_batch, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -949,27 +1063,28 @@ fun test_confirm_release_rejects_without_proposal() {
 #[test, expected_failure(abort_code = 12)]
 fun test_propose_release_rejects_non_critical_hold() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-021");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-021");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Just a recall, not critical",
             batch::severity_recall(),
+            batch::category_other(),
             b"CASE-2026-015",
             &clock,
             ctx,
         );
-        batch::propose_release(&cap, &mut shared_batch, b"Trying multisig on a non-critical hold", &clock, ctx);
+        batch::propose_release(&registry, &mut shared_batch, b"Trying multisig on a non-critical hold", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
@@ -979,28 +1094,29 @@ fun test_propose_release_rejects_non_critical_hold() {
 #[test, expected_failure(abort_code = 13)]
 fun test_propose_release_rejects_duplicate_proposal() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    setup_batch_with_cap(&mut scenario, b"BATCH-2026-022");
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-022");
 
     scenario.next_tx(MANUFACTURER);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
-        let cap = scenario.take_from_sender<RegulatorCap>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         batch::place_hold(
-            &cap,
+            &registry,
             &mut shared_batch,
             b"Confirmed counterfeit",
             batch::severity_critical(),
+            batch::category_counterfeit(),
             b"CASE-2026-016",
             &clock,
             ctx,
         );
-        batch::propose_release(&cap, &mut shared_batch, b"First proposal", &clock, ctx);
-        batch::propose_release(&cap, &mut shared_batch, b"Second proposal", &clock, ctx);
+        batch::propose_release(&registry, &mut shared_batch, b"First proposal", &clock, ctx);
+        batch::propose_release(&registry, &mut shared_batch, b"Second proposal", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
-        scenario.return_to_sender(cap);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();

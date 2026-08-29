@@ -43,14 +43,42 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
   const { data, isLoading, isFetched, isError, error, refetch } = useSuiClientQuery(
     'getObject',
     { id: queryId, options: { showContent: true } },
-    { enabled: Boolean(queryId) },
+    {
+      enabled: Boolean(queryId),
+      // Without this, revisiting the same batch ID (e.g. switching back
+      // from the Scan tab after adding a checkpoint elsewhere) can show a
+      // cached snapshot from before that checkpoint existed — looking like
+      // "this wasn't recorded" when it actually was, just not refetched.
+      staleTime: 0,
+      refetchOnMount: 'always',
+    },
   );
 
   const batch: BatchRecord | null = data ? parseBatchObject(data) : null;
 
+  // An AI report reasons over a specific snapshot of the checkpoint/hold
+  // state. If that state changes underneath it (a new checkpoint lands, a
+  // hold gets placed/released) after the report was generated, the old
+  // report's conclusions no longer describe the current batch — clear it
+  // rather than let a stale "no checkpoints yet" verdict sit next to a
+  // ledger that now has one.
+  const batchFingerprint = batch
+    ? `${batch.checkpoints.length}:${batch.isHeld}:${batch.holdHistory.length}`
+    : null;
+  const [lastReportFingerprint, setLastReportFingerprint] = useState<string | null>(null);
+  const [reportInvalidated, setReportInvalidated] = useState(false);
+  useEffect(() => {
+    if (report && batchFingerprint !== null && batchFingerprint !== lastReportFingerprint) {
+      setReport(null);
+      setReportInvalidated(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchFingerprint]);
+
   function handleLookup(e: FormEvent) {
     e.preventDefault();
     setReport(null);
+    setReportInvalidated(false);
     setSerial(null);
     setQueryId(batchId.trim());
   }
@@ -61,6 +89,8 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
     try {
       const result = await checkAnomaly(batch);
       setReport(result);
+      setLastReportFingerprint(batchFingerprint);
+      setReportInvalidated(false);
     } finally {
       setChecking(false);
     }
@@ -175,6 +205,13 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
             <p className="helper-text" style={{ marginTop: 4 }}>
               Querying 2 independent models on Gonka Router in parallel — this genuinely takes
               20-40+ seconds with full reasoning, it isn't stuck.
+            </p>
+          )}
+          {!checking && reportInvalidated && (
+            <p className="helper-text" style={{ marginTop: 4 }}>
+              The custody chain changed since the last check (a checkpoint or hold was
+              added/updated) — the previous report no longer reflects the current state and has
+              been cleared. Re-run verification for a current result.
             </p>
           )}
 

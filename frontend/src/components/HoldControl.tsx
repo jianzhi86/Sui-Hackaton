@@ -1,13 +1,19 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, PACKAGE_ID, target } from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, PACKAGE_ID, REGISTRY_OBJECT_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import {
+  CATEGORY_COLD_CHAIN_BREACH,
+  CATEGORY_COUNTERFEIT,
+  CATEGORY_LABELING_ERROR,
+  CATEGORY_OTHER,
+  CATEGORY_QUALITY_DEFECT,
   SEVERITY_ADVISORY,
   SEVERITY_CRITICAL,
   SEVERITY_RECALL,
   type BatchRecord,
+  type HoldCategory,
   type HoldSeverity,
 } from '../lib/types';
 
@@ -23,8 +29,20 @@ const SEVERITY_CLASSES: Record<HoldSeverity, string> = {
   3: 'severity-badge severity-critical',
 };
 
-function SeverityBadge({ severity }: { severity: HoldSeverity }) {
+export function SeverityBadge({ severity }: { severity: HoldSeverity }) {
   return <span className={SEVERITY_CLASSES[severity]}>{SEVERITY_LABELS[severity]}</span>;
+}
+
+const CATEGORY_LABELS: Record<HoldCategory, string> = {
+  1: 'Counterfeit',
+  2: 'Quality Defect',
+  3: 'Labeling Error',
+  4: 'Cold-Chain Breach',
+  5: 'Other',
+};
+
+export function CategoryBadge({ category }: { category: HoldCategory }) {
+  return <span className="severity-badge" style={{ color: 'var(--ink-soft)' }}>{CATEGORY_LABELS[category]}</span>;
 }
 
 /**
@@ -63,39 +81,63 @@ interface HoldControlProps {
 }
 
 /**
- * Placing/releasing a hold requires a `RegulatorCap` object (unlike
- * checkpoints, which anyone can add). This looks up whether the connected
- * wallet owns one and, if so, passes its object ID into the moveCall —
- * the Move side re-checks this by type, so the frontend check is purely
- * for UX (hiding the form), not the actual security boundary.
+ * Placing/releasing a hold requires the connected address to be listed in
+ * the shared `RegulatorRegistry` (an allow-list, not a bearer capability
+ * object — see the Move module doc comment for why that distinction
+ * matters for revocation). This reads the registry's raw `regulators`
+ * field (a `VecSet<address>`, which serializes as `{ contents: [...] }`)
+ * directly — no need to call into Move for a plain field read.
  */
-function useRegulatorCap() {
+function useIsRegulator() {
+  const account = useCurrentAccount();
+  const { data, isLoading, refetch } = useSuiClientQuery(
+    'getObject',
+    { id: REGISTRY_OBJECT_ID, options: { showContent: true } },
+    { staleTime: 0, refetchOnMount: 'always' },
+  );
+
+  const content = data?.data?.content;
+  const regulators: string[] =
+    content && content.dataType === 'moveObject'
+      ? ((content.fields as any)?.regulators?.fields?.contents ?? [])
+      : [];
+
+  const isRegulator = Boolean(account && regulators.includes(account.address));
+  return { isRegulator, regulators, isLoading, refetch };
+}
+
+/** Whether the connected wallet holds the `AdminCap` that can add/revoke
+ * regulators. Unlike registry membership, this really is a bearer
+ * capability object — see the Move module doc comment on `AdminCap`. */
+function useAdminCap() {
   const account = useCurrentAccount();
   const { data, isLoading, refetch } = useSuiClientQuery(
     'getOwnedObjects',
     {
       owner: account?.address ?? '',
-      filter: { StructType: `${PACKAGE_ID}::batch::RegulatorCap` },
+      filter: { StructType: `${PACKAGE_ID}::batch::AdminCap` },
       options: { showContent: false },
     },
     { enabled: Boolean(account) },
   );
 
-  const capId = data?.data?.[0]?.data?.objectId ?? null;
-  return { capId, isLoading, refetch };
+  const adminCapId = data?.data?.[0]?.data?.objectId ?? null;
+  return { adminCapId, isLoading, refetch };
 }
 
 /**
- * Lets a `RegulatorCap` holder place or release a hold on a batch.
- * `place_hold` freezes the on-chain custody chain: `add_checkpoint` aborts
- * while `is_held` is true, so this isn't just a cosmetic flag.
+ * Lets a listed regulator place or release a hold on a batch. `place_hold`
+ * freezes the on-chain custody chain: `add_checkpoint` aborts while
+ * `is_held` is true, so this isn't just a cosmetic flag.
  */
 export function HoldControl({ batch, onChanged }: HoldControlProps) {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
-  const { capId, isLoading: capLoading, refetch: refetchCap } = useRegulatorCap();
+  const { isRegulator, isLoading: regLoading } = useIsRegulator();
+  const { adminCapId, refetch: refetchAdmin } = useAdminCap();
   const [reason, setReason] = useState('');
   const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_RECALL);
+  const [category, setCategory] = useState<HoldCategory>(CATEGORY_QUALITY_DEFECT);
   const [caseReference, setCaseReference] = useState('');
   const [releaseNote, setReleaseNote] = useState('');
   const [confirmingRelease, setConfirmingRelease] = useState(false);
@@ -113,16 +155,16 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
       setError('A case/investigation reference is required — this is what ties the hold back to your paperwork.');
       return;
     }
-    if (!capId) return;
 
     const tx = new Transaction();
     tx.moveCall({
       target: target('place_hold'),
       arguments: [
-        tx.object(capId),
+        tx.object(REGISTRY_OBJECT_ID),
         tx.object(batch.objectId),
         tx.pure.string(reason.trim()),
         tx.pure.u8(severity),
+        tx.pure.u8(category),
         tx.pure.string(caseReference.trim()),
         tx.object(CLOCK_OBJECT_ID),
       ],
@@ -135,6 +177,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           setReason('');
           setCaseReference('');
           setSeverity(SEVERITY_RECALL);
+          setCategory(CATEGORY_QUALITY_DEFECT);
           onChanged();
         },
         onError: (err) => setError(err.message),
@@ -150,13 +193,12 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
       setError('A release note is required — explain why it is safe to unfreeze this batch.');
       return;
     }
-    if (!capId) return;
 
     const tx = new Transaction();
     tx.moveCall({
       target: target('release_hold'),
       arguments: [
-        tx.object(capId),
+        tx.object(REGISTRY_OBJECT_ID),
         tx.object(batch.objectId),
         tx.pure.string(releaseNote.trim()),
         tx.object(CLOCK_OBJECT_ID),
@@ -184,13 +226,12 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
       setError('A release note is required — explain why it is safe to unfreeze this batch.');
       return;
     }
-    if (!capId) return;
 
     const tx = new Transaction();
     tx.moveCall({
       target: target('propose_release'),
       arguments: [
-        tx.object(capId),
+        tx.object(REGISTRY_OBJECT_ID),
         tx.object(batch.objectId),
         tx.pure.string(releaseNote.trim()),
         tx.object(CLOCK_OBJECT_ID),
@@ -212,12 +253,11 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
 
   function handleConfirmRelease() {
     setError(null);
-    if (!capId) return;
 
     const tx = new Transaction();
     tx.moveCall({
       target: target('confirm_release'),
-      arguments: [tx.object(capId), tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
+      arguments: [tx.object(REGISTRY_OBJECT_ID), tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
     });
 
     signAndExecute(
@@ -229,7 +269,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     );
   }
 
-  const canAct = Boolean(account && capId && !capLoading);
+  const canAct = Boolean(account && isRegulator && !regLoading);
   const isCritical = batch.holdSeverity === SEVERITY_CRITICAL;
   const isProposer = Boolean(account && batch.pendingReleaseBy === account.address);
 
@@ -238,6 +278,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
       {batch.isHeld ? (
         <div className="hold-banner hold-banner-active">
           <strong>⚠ ON HOLD</strong> <SeverityBadge severity={batch.holdSeverity as HoldSeverity} />{' '}
+          <CategoryBadge category={batch.holdCategory as HoldCategory} />{' '}
           <StaleHoldBadge heldAtMs={batch.heldAtMs} severity={batch.holdSeverity as HoldSeverity} />
           <p>
             Reason: "{batch.holdReason}" — case <span className="code-chip">{batch.holdCaseReference}</span>{' '}
@@ -251,7 +292,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
             <>
               <p className="helper-text">
                 Critical holds can't be released by one person — this needs a second, different
-                Regulator Cap holder to independently confirm.
+                listed regulator to independently confirm.
               </p>
 
               {batch.pendingReleaseBy ? (
@@ -263,8 +304,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
                   </p>
                   {isProposer ? (
                     <p className="error-text">
-                      You proposed this release — a different Regulator Cap holder must confirm it,
-                      not you.
+                      You proposed this release — a different regulator must confirm it, not you.
                     </p>
                   ) : (
                     <button
@@ -360,9 +400,9 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           )}
 
           {!account && <p className="helper-text">Connect a wallet to release this hold.</p>}
-          {account && !capLoading && !capId && (
+          {account && !regLoading && !isRegulator && (
             <p className="helper-text">
-              Your connected wallet does not hold a Regulator Cap, so it cannot release this hold.
+              Your connected wallet is not a listed regulator, so it cannot release this hold.
             </p>
           )}
         </div>
@@ -394,29 +434,44 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
                 </select>
               </div>
               <div className="field">
-                <label htmlFor="caseReference">Case / investigation reference</label>
-                <input
-                  id="caseReference"
-                  value={caseReference}
-                  onChange={(e) => setCaseReference(e.target.value)}
-                  placeholder="e.g. MOH-2026-0417"
+                <label htmlFor="holdCategory">Category</label>
+                <select
+                  id="holdCategory"
+                  value={category}
+                  onChange={(e) => setCategory(Number(e.target.value) as HoldCategory)}
                   disabled={!canAct || isPending}
-                />
+                >
+                  <option value={CATEGORY_COUNTERFEIT}>Counterfeit</option>
+                  <option value={CATEGORY_QUALITY_DEFECT}>Quality Defect</option>
+                  <option value={CATEGORY_LABELING_ERROR}>Labeling Error</option>
+                  <option value={CATEGORY_COLD_CHAIN_BREACH}>Cold-Chain Breach</option>
+                  <option value={CATEGORY_OTHER}>Other</option>
+                </select>
               </div>
+            </div>
+            <div className="field">
+              <label htmlFor="caseReference">Case / investigation reference</label>
+              <input
+                id="caseReference"
+                value={caseReference}
+                onChange={(e) => setCaseReference(e.target.value)}
+                placeholder="e.g. MOH-2026-0417"
+                disabled={!canAct || isPending}
+              />
             </div>
             {error && <p className="error-text">{error}</p>}
             <button type="submit" className="btn btn-danger" disabled={!canAct || isPending}>
               {isPending ? 'Placing hold…' : 'Place hold'}
             </button>
             {!account && <p className="helper-text">Connect a wallet to place a hold.</p>}
-            {account && !capLoading && !capId && (
+            {account && !regLoading && !isRegulator && (
               <p className="helper-text">
-                Your connected wallet does not hold a Regulator Cap, so it cannot place a hold on
-                this batch. Ask an existing regulator to mint you one.
+                Your connected wallet is not a listed regulator, so it cannot place a hold on this
+                batch. Ask an admin to add your address to the registry.
               </p>
             )}
           </form>
-          {capId && <MintCapForm capId={capId} onMinted={refetchCap} />}
+          {adminCapId && <AdminPanel adminCapId={adminCapId} onChanged={refetchAdmin} />}
         </div>
       )}
 
@@ -438,7 +493,8 @@ function HoldHistoryList({ history }: { history: BatchRecord['holdHistory'] }) {
           <div className="ledger-entry" key={i}>
             <span className="ledger-dot">{i + 1}</span>
             <div className="ledger-role">
-              {h.releasedBy === null ? 'Held (active)' : 'Held & released'} <SeverityBadge severity={h.severity} />
+              {h.releasedBy === null ? 'Held (active)' : 'Held & released'} <SeverityBadge severity={h.severity} />{' '}
+              <CategoryBadge category={h.category} />
             </div>
             <div className="ledger-meta">
               Case <span className="code-chip">{h.caseReference}</span> · placed by{' '}
@@ -466,36 +522,71 @@ function HoldHistoryList({ history }: { history: BatchRecord['holdHistory'] }) {
   );
 }
 
-/** Lets an existing RegulatorCap holder onboard another address. */
-function MintCapForm({ capId, onMinted }: { capId: string; onMinted: () => void }) {
+/**
+ * Lets the `AdminCap` holder add or revoke regulator addresses. This is
+ * the actual point of the allow-list design over the old bearer-capability
+ * model: revocation here is a real removal from the registry, not a
+ * superseded-but-still-valid object sitting in someone's wallet forever.
+ */
+function AdminPanel({ adminCapId, onChanged }: { adminCapId: string; onChanged: () => void }) {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
-  const [recipient, setRecipient] = useState('');
+  const [addAddress, setAddAddress] = useState('');
+  const [revokeAddress, setRevokeAddress] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  function handleMint(e: FormEvent) {
+  function handleAdd(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSuccess(null);
 
-    if (!recipient.trim()) {
+    if (!addAddress.trim()) {
       setError('An address is required.');
       return;
     }
 
     const tx = new Transaction();
     tx.moveCall({
-      target: target('mint_regulator_cap'),
-      arguments: [tx.object(capId), tx.pure.address(recipient.trim())],
+      target: target('admin_add_regulator'),
+      arguments: [tx.object(adminCapId), tx.object(REGISTRY_OBJECT_ID), tx.pure.address(addAddress.trim())],
     });
 
     signAndExecute(
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
         onSuccess: () => {
-          setSuccess(`Regulator Cap minted to ${recipient.trim()}.`);
-          setRecipient('');
-          onMinted();
+          setSuccess(`${addAddress.trim()} added as a regulator.`);
+          setAddAddress('');
+          onChanged();
+        },
+        onError: (err) => setError(err.message),
+      },
+    );
+  }
+
+  function handleRevoke(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+
+    if (!revokeAddress.trim()) {
+      setError('An address is required.');
+      return;
+    }
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: target('admin_revoke_regulator'),
+      arguments: [tx.object(adminCapId), tx.object(REGISTRY_OBJECT_ID), tx.pure.address(revokeAddress.trim())],
+    });
+
+    signAndExecute(
+      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
+      {
+        onSuccess: () => {
+          setSuccess(`${revokeAddress.trim()} revoked — that address can no longer place or release holds.`);
+          setRevokeAddress('');
+          onChanged();
         },
         onError: (err) => setError(err.message),
       },
@@ -505,25 +596,44 @@ function MintCapForm({ capId, onMinted }: { capId: string; onMinted: () => void 
   return (
     <details style={{ marginTop: 12 }}>
       <summary className="helper-text" style={{ cursor: 'pointer' }}>
-        Grant regulator access to another address
+        Admin: manage regulator access
       </summary>
-      <form onSubmit={handleMint} style={{ marginTop: 8 }}>
-        <div className="field">
-          <label htmlFor="regulatorRecipient">Address to onboard</label>
-          <input
-            id="regulatorRecipient"
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            placeholder="0x…"
-            disabled={isPending}
-          />
-        </div>
+      <div style={{ marginTop: 8 }}>
+        <form onSubmit={handleAdd}>
+          <div className="field">
+            <label htmlFor="addRegulator">Add regulator address</label>
+            <input
+              id="addRegulator"
+              value={addAddress}
+              onChange={(e) => setAddAddress(e.target.value)}
+              placeholder="0x…"
+              disabled={isPending}
+            />
+          </div>
+          <button type="submit" className="btn btn-secondary" disabled={isPending}>
+            {isPending ? 'Adding…' : 'Add regulator'}
+          </button>
+        </form>
+
+        <form onSubmit={handleRevoke} style={{ marginTop: 12 }}>
+          <div className="field">
+            <label htmlFor="revokeRegulator">Revoke regulator address</label>
+            <input
+              id="revokeRegulator"
+              value={revokeAddress}
+              onChange={(e) => setRevokeAddress(e.target.value)}
+              placeholder="0x…"
+              disabled={isPending}
+            />
+          </div>
+          <button type="submit" className="btn btn-danger" disabled={isPending}>
+            {isPending ? 'Revoking…' : 'Revoke regulator'}
+          </button>
+        </form>
+
         {error && <p className="error-text">{error}</p>}
         {success && <p className="success-banner">{success}</p>}
-        <button type="submit" className="btn btn-secondary" disabled={isPending}>
-          {isPending ? 'Minting…' : 'Mint Regulator Cap'}
-        </button>
-      </form>
+      </div>
     </details>
   );
 }

@@ -31,6 +31,16 @@ const RPC_URLS = {
  */
 export const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID || '0x0';
 
+/**
+ * Object ID of the shared `RegulatorRegistry`, created once at publish
+ * time by `init` — unlike `PACKAGE_ID`, this can't be derived from
+ * anything else, since a shared object's ID is only known from the
+ * publish transaction's output ("Created Objects" — the one with type
+ * `...::batch::RegulatorRegistry`). Copy it into `.env` as
+ * `VITE_REGISTRY_OBJECT_ID` alongside `VITE_PACKAGE_ID` after publishing.
+ */
+export const REGISTRY_OBJECT_ID = import.meta.env.VITE_REGISTRY_OBJECT_ID || '0x0';
+
 export const MODULE_NAME = 'batch';
 
 /** Sui's shared Clock object always lives at this fixed address. */

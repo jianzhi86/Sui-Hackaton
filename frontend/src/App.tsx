@@ -5,8 +5,9 @@ import { CheckpointScanner } from './components/CheckpointScanner';
 import { BatchLookup } from './components/BatchLookup';
 import { MintUnitForm } from './components/MintUnitForm';
 import { PurchaseUnitScanner } from './components/PurchaseUnitScanner';
+import { ActiveHoldsDashboard } from './components/ActiveHoldsDashboard';
 
-export type Tab = 'register' | 'scan' | 'verify' | 'mint' | 'pay';
+export type Tab = 'register' | 'scan' | 'verify' | 'mint' | 'pay' | 'holds';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('register');
@@ -34,6 +35,12 @@ export default function App() {
     }
   }, []);
 
+  function handleSelectBatchFromHolds(batchId: string) {
+    setInitialBatchId(batchId);
+    setInitialSerial(undefined);
+    setTab('verify');
+  }
+
   return (
     <div className="app-shell">
       <Header active={tab} onNavigate={setTab} />
@@ -42,6 +49,7 @@ export default function App() {
       {tab === 'verify' && <BatchLookup initialBatchId={initialBatchId} initialSerial={initialSerial} />}
       {tab === 'mint' && <MintUnitForm />}
       {tab === 'pay' && <PurchaseUnitScanner initialUnitId={initialUnitId} />}
+      {tab === 'holds' && <ActiveHoldsDashboard onSelectBatch={handleSelectBatchFromHolds} />}
     </div>
   );
 }
