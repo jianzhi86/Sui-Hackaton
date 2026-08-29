@@ -4,27 +4,28 @@ import { analyzeChain } from './chainAnalysis';
 // ---------------------------------------------------------------------------
 // Gonka Router integration.
 //
-// HONESTY CHECK BEFORE YOUR DEMO: this targets the OpenAI-compatible
-// chat-completions shape most inference routers expose, since that's the
-// de facto standard and Gonka Router's own naming strongly suggests it
-// follows it. This scaffold was written without live access to
-// gonkarouter.io, so three things are assumptions, not verified facts:
-//   1. Base URL / path (GONKA_BASE_URL + '/chat/completions')
-//   2. Auth header shape (`Authorization: Bearer <key>`)
-//   3. Response envelope (`choices[0].message.content`, OpenAI-style)
-// Confirm all three against the official docs or the Gonka MCP tool
-// (`get_sdk_context`-style helper, if they have one) before relying on this
-// for judging. Everything else here — the consensus logic, the rule-based
-// fallback, the prompt — is independent of that and will not need to change.
+// This calls our own `/api/gonka` (a Vercel function in production, a Vite
+// dev-server middleware locally — see `api/gonka.ts` and `vite.config.ts`)
+// instead of api.gonkarouter.io directly, for two confirmed-live reasons
+// (2026-08-29): api.gonkarouter.io sends no CORS headers, so a browser
+// can't call it directly at all; and the API key must never ship inside
+// client-bundled code, which any `VITE_`-prefixed env var does. The proxy
+// holds the real base URL and key server-side.
+//
+// Also confirmed live: base auth shape (`Authorization: Bearer <key>`) and
+// the OpenAI-style `choices[0].message.content` response envelope are
+// correct as written. MiniMax-M2.7 (and likely other reasoning-capable
+// models on the router) prepends a `<think>...</think>` block before its
+// actual answer — `parseModelJson` strips that before parsing JSON, on top
+// of the markdown fences some models also add.
 // ---------------------------------------------------------------------------
 
-const GONKA_BASE_URL = import.meta.env.VITE_GONKA_BASE_URL || 'https://api.gonkarouter.io/v1';
-const GONKA_API_KEY = import.meta.env.VITE_GONKA_API_KEY || '';
-
-// Confirmed against gonkarouter.io/docs: these are the real model ID strings
-// GonkaRouter expects in the "model" field (plain 'minimax'/'kimi' 404s).
-// Note: "model ids differ per gateway plan" per their docs — check the
-// /models page for your account if these stop working.
+// Model ID strings aren't secret (unlike the API key/base URL), so these
+// stay client-side for the UI to reference by name. Confirmed against
+// gonkarouter.io/docs: these are the real model ID strings GonkaRouter
+// expects in the "model" field (plain 'minimax'/'kimi' 404s). Note: "model
+// ids differ per gateway plan" per their docs — check the /models page for
+// your account if these stop working.
 const MODEL_A = import.meta.env.VITE_GONKA_MODEL_A || 'MiniMaxAI/MiniMax-M2.7';
 const MODEL_B = import.meta.env.VITE_GONKA_MODEL_B || 'moonshotai/Kimi-K2.6';
 
@@ -34,12 +35,9 @@ interface RawModelResponse {
 }
 
 async function callGonkaModel(model: string, prompt: string): Promise<RawModelResponse> {
-  const res = await fetch(`${GONKA_BASE_URL}/chat/completions`, {
+  const res = await fetch('/api/gonka', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GONKA_API_KEY}`,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
       temperature: 0.2,
@@ -70,12 +68,27 @@ async function callGonkaModel(model: string, prompt: string): Promise<RawModelRe
 
 function parseModelJson(model: string, requestId: string, raw: string): ModelVerdict {
   try {
-    const cleaned = raw
+    // Reasoning-capable models (confirmed live against gonkarouter.io: this
+    // is exactly what MiniMax-M2.7 does) prepend a `<think>...</think>`
+    // block before the actual answer, on top of the markdown fences some
+    // models also add. Strip both, then — since a model can still add
+    // stray prose around the object despite the system prompt — fall back
+    // to slicing out the outermost `{...}` rather than trusting the string
+    // starts/ends exactly at the JSON.
+    let cleaned = raw
       .trim()
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
       .replace(/^```json/i, '')
       .replace(/^```/, '')
       .replace(/```$/, '')
       .trim();
+
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    }
+
     const parsed = JSON.parse(cleaned);
     const riskScore = Math.max(0, Math.min(100, Number(parsed.risk_score) || 0));
     const verdict: 'clear' | 'flag' = parsed.verdict === 'flag' ? 'flag' : 'clear';

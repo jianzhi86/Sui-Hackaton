@@ -3,7 +3,29 @@ import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, PACKAGE_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
-import type { BatchRecord } from '../lib/types';
+import {
+  SEVERITY_ADVISORY,
+  SEVERITY_CRITICAL,
+  SEVERITY_RECALL,
+  type BatchRecord,
+  type HoldSeverity,
+} from '../lib/types';
+
+const SEVERITY_LABELS: Record<HoldSeverity, string> = {
+  1: 'Advisory',
+  2: 'Recall',
+  3: 'Critical — stop sale',
+};
+
+const SEVERITY_CLASSES: Record<HoldSeverity, string> = {
+  1: 'severity-badge severity-advisory',
+  2: 'severity-badge severity-recall',
+  3: 'severity-badge severity-critical',
+};
+
+function SeverityBadge({ severity }: { severity: HoldSeverity }) {
+  return <span className={SEVERITY_CLASSES[severity]}>{SEVERITY_LABELS[severity]}</span>;
+}
 
 interface HoldControlProps {
   batch: BatchRecord;
@@ -43,6 +65,10 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const { capId, isLoading: capLoading, refetch: refetchCap } = useRegulatorCap();
   const [reason, setReason] = useState('');
+  const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_RECALL);
+  const [caseReference, setCaseReference] = useState('');
+  const [releaseNote, setReleaseNote] = useState('');
+  const [confirmingRelease, setConfirmingRelease] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function handlePlaceHold(e: FormEvent) {
@@ -51,6 +77,10 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
 
     if (!reason.trim()) {
       setError('A reason is required to place a hold.');
+      return;
+    }
+    if (!caseReference.trim()) {
+      setError('A case/investigation reference is required — this is what ties the hold back to your paperwork.');
       return;
     }
     if (!capId) return;
@@ -62,6 +92,8 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
         tx.object(capId),
         tx.object(batch.objectId),
         tx.pure.string(reason.trim()),
+        tx.pure.u8(severity),
+        tx.pure.string(caseReference.trim()),
         tx.object(CLOCK_OBJECT_ID),
       ],
     });
@@ -71,6 +103,8 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
       {
         onSuccess: () => {
           setReason('');
+          setCaseReference('');
+          setSeverity(SEVERITY_RECALL);
           onChanged();
         },
         onError: (err) => setError(err.message),
@@ -78,20 +112,35 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     );
   }
 
-  function handleReleaseHold() {
+  function handleReleaseHold(e: FormEvent) {
+    e.preventDefault();
     setError(null);
+
+    if (!releaseNote.trim()) {
+      setError('A release note is required — explain why it is safe to unfreeze this batch.');
+      return;
+    }
     if (!capId) return;
 
     const tx = new Transaction();
     tx.moveCall({
       target: target('release_hold'),
-      arguments: [tx.object(capId), tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
+      arguments: [
+        tx.object(capId),
+        tx.object(batch.objectId),
+        tx.pure.string(releaseNote.trim()),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
     });
 
     signAndExecute(
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
-        onSuccess: () => onChanged(),
+        onSuccess: () => {
+          setReleaseNote('');
+          setConfirmingRelease(false);
+          onChanged();
+        },
         onError: (err) => setError(err.message),
       },
     );
@@ -103,22 +152,56 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     <>
       {batch.isHeld ? (
         <div className="hold-banner hold-banner-active">
-          <strong>⚠ ON HOLD</strong>
+          <strong>⚠ ON HOLD</strong> <SeverityBadge severity={batch.holdSeverity as HoldSeverity} />
           <p>
-            Reason: "{batch.holdReason}" — placed by{' '}
-            <span className="code-chip">{batch.heldBy}</span> at{' '}
+            Reason: "{batch.holdReason}" — case <span className="code-chip">{batch.holdCaseReference}</span>{' '}
+            — placed by <span className="code-chip">{batch.heldBy}</span> at{' '}
             {new Date(batch.heldAtMs).toLocaleString()}. No new checkpoints can be recorded until
             this is released.
           </p>
           {error && <p className="error-text">{error}</p>}
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleReleaseHold}
-            disabled={!canAct || isPending}
-          >
-            {isPending ? 'Releasing…' : 'Release hold'}
-          </button>
+
+          {!confirmingRelease ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setConfirmingRelease(true)}
+              disabled={!canAct || isPending}
+            >
+              Release hold
+            </button>
+          ) : (
+            <form onSubmit={handleReleaseHold}>
+              <div className="field">
+                <label htmlFor="releaseNote">Why is it safe to release this hold?</label>
+                <input
+                  id="releaseNote"
+                  value={releaseNote}
+                  onChange={(e) => setReleaseNote(e.target.value)}
+                  placeholder="e.g. Investigation closed — counterfeit ruled out, manifest matches"
+                  disabled={!canAct || isPending}
+                  autoFocus
+                />
+              </div>
+              <button type="submit" className="btn btn-danger" disabled={!canAct || isPending}>
+                {isPending ? 'Releasing…' : 'Confirm release'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ marginLeft: 8 }}
+                onClick={() => {
+                  setConfirmingRelease(false);
+                  setReleaseNote('');
+                  setError(null);
+                }}
+                disabled={isPending}
+              >
+                Cancel
+              </button>
+            </form>
+          )}
+
           {!account && <p className="helper-text">Connect a wallet to release this hold.</p>}
           {account && !capLoading && !capId && (
             <p className="helper-text">
@@ -138,6 +221,31 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
                 placeholder="e.g. Suspected counterfeit — seal mismatch"
                 disabled={!canAct || isPending}
               />
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="holdSeverity">Severity</label>
+                <select
+                  id="holdSeverity"
+                  value={severity}
+                  onChange={(e) => setSeverity(Number(e.target.value) as HoldSeverity)}
+                  disabled={!canAct || isPending}
+                >
+                  <option value={SEVERITY_ADVISORY}>Advisory</option>
+                  <option value={SEVERITY_RECALL}>Recall</option>
+                  <option value={SEVERITY_CRITICAL}>Critical — stop sale</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="caseReference">Case / investigation reference</label>
+                <input
+                  id="caseReference"
+                  value={caseReference}
+                  onChange={(e) => setCaseReference(e.target.value)}
+                  placeholder="e.g. MOH-2026-0417"
+                  disabled={!canAct || isPending}
+                />
+              </div>
             </div>
             {error && <p className="error-text">{error}</p>}
             <button type="submit" className="btn btn-danger" disabled={!canAct || isPending}>
@@ -172,16 +280,19 @@ function HoldHistoryList({ history }: { history: BatchRecord['holdHistory'] }) {
         {history.map((h, i) => (
           <div className="ledger-entry" key={i}>
             <span className="ledger-dot">{i + 1}</span>
-            <div className="ledger-role">{h.releasedBy === null ? 'Held (active)' : 'Held & released'}</div>
+            <div className="ledger-role">
+              {h.releasedBy === null ? 'Held (active)' : 'Held & released'} <SeverityBadge severity={h.severity} />
+            </div>
             <div className="ledger-meta">
-              Placed by <span className="code-chip">{h.heldBy}</span> at{' '}
-              {new Date(h.heldAtMs).toLocaleString()}
+              Case <span className="code-chip">{h.caseReference}</span> · placed by{' '}
+              <span className="code-chip">{h.heldBy}</span> at {new Date(h.heldAtMs).toLocaleString()}
             </div>
             <div className="ledger-note">"{h.reason}"</div>
             {h.releasedBy !== null && (
               <div className="helper-text">
                 Released by <span className="code-chip">{h.releasedBy}</span> at{' '}
                 {h.releasedAtMs !== null ? new Date(h.releasedAtMs).toLocaleString() : 'unknown'}
+                {h.releaseNote && <> — "{h.releaseNote}"</>}
               </div>
             )}
           </div>

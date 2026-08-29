@@ -4,26 +4,41 @@ import { parseBatchObject } from '../lib/suiRead';
 import type { AnomalyReportResult, BatchRecord } from '../lib/types';
 import { checkAnomaly } from '../lib/gonka';
 import { QrScanButton } from './QrScanButton';
-import { extractBatchId } from '../lib/qr';
+import { extractBatchId, extractSerial } from '../lib/qr';
 import { AnomalyPanel } from './AnomalyPanel';
 import { HoldControl } from './HoldControl';
+import { ItemQrSheet } from './ItemQrSheet';
 
 interface BatchLookupProps {
   initialBatchId?: string;
+  initialSerial?: string;
 }
 
-export function BatchLookup({ initialBatchId }: BatchLookupProps) {
+export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps) {
   const [batchId, setBatchId] = useState(initialBatchId ?? '');
   const [queryId, setQueryId] = useState(initialBatchId ?? '');
+  const [serial, setSerial] = useState<string | null>(initialSerial ?? null);
   const [report, setReport] = useState<AnomalyReportResult | null>(null);
   const [checking, setChecking] = useState(false);
+  const [checkingElapsedS, setCheckingElapsedS] = useState(0);
+
+  // Two independent models running with full reasoning genuinely takes
+  // 20-40+ seconds — without this, "Running AI verification…" alone looks
+  // frozen well before either model has answered.
+  useEffect(() => {
+    if (!checking) return;
+    setCheckingElapsedS(0);
+    const id = setInterval(() => setCheckingElapsedS((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [checking]);
 
   useEffect(() => {
     if (initialBatchId) {
       setBatchId(initialBatchId);
       setQueryId(initialBatchId);
+      setSerial(initialSerial ?? null);
     }
-  }, [initialBatchId]);
+  }, [initialBatchId, initialSerial]);
 
   const { data, isLoading, isFetched, isError, error, refetch } = useSuiClientQuery(
     'getObject',
@@ -36,6 +51,7 @@ export function BatchLookup({ initialBatchId }: BatchLookupProps) {
   function handleLookup(e: FormEvent) {
     e.preventDefault();
     setReport(null);
+    setSerial(null);
     setQueryId(batchId.trim());
   }
 
@@ -58,7 +74,12 @@ export function BatchLookup({ initialBatchId }: BatchLookupProps) {
         from Sui — no wallet or login required to check a product.
       </p>
 
-      <QrScanButton onDecoded={(text) => setBatchId(extractBatchId(text))} />
+      <QrScanButton
+        onDecoded={(text) => {
+          setBatchId(extractBatchId(text));
+          setSerial(extractSerial(text));
+        }}
+      />
 
       <form onSubmit={handleLookup}>
         <div className="field">
@@ -93,8 +114,14 @@ export function BatchLookup({ initialBatchId }: BatchLookupProps) {
         <div style={{ marginTop: 20 }}>
           <h3 style={{ fontFamily: 'var(--font-display)', marginBottom: 2 }}>{batch.productName}</h3>
           <p className="helper-text">
-            Batch <span className="code-chip">{batch.batchCode}</span> · registered by{' '}
-            <span className="code-chip">{batch.manufacturer}</span>
+            Batch <span className="code-chip">{batch.batchCode}</span>
+            {serial && (
+              <>
+                {' '}
+                · package <span className="code-chip">#{serial}</span>
+              </>
+            )}{' '}
+            · registered by <span className="code-chip">{batch.manufacturer}</span>
           </p>
 
           <HoldControl batch={batch} onChanged={() => refetch()} />
@@ -127,10 +154,18 @@ export function BatchLookup({ initialBatchId }: BatchLookupProps) {
             onClick={handleCheckAnomaly}
             disabled={checking}
           >
-            {checking ? 'Running AI verification…' : 'Run AI verification'}
+            {checking ? `Running AI verification… (${checkingElapsedS}s)` : 'Run AI verification'}
           </button>
+          {checking && (
+            <p className="helper-text" style={{ marginTop: 4 }}>
+              Querying 2 independent models on Gonka Router in parallel — this genuinely takes
+              20-40+ seconds with full reasoning, it isn't stuck.
+            </p>
+          )}
 
           {report && <AnomalyPanel report={report} />}
+
+          <ItemQrSheet batchId={batch.objectId} batchCode={batch.batchCode} />
         </div>
       )}
     </section>

@@ -22,6 +22,13 @@
 /// so it requires a `RegulatorCap` object rather than just an address. One
 /// `RegulatorCap` is minted to the package deployer at publish time; that
 /// holder (or anyone they choose to mint a cap for) can then place holds.
+///
+/// A hold carries a `severity` classification (`SEVERITY_*`), a mandatory
+/// `case_reference` for cross-referencing off-chain paperwork, and — on
+/// release — a mandatory `release_note`. All three are required inputs,
+/// not optional metadata: a regulatory hold with no severity, no case to
+/// point back to, or no stated reason for lifting it isn't a usable audit
+/// record, just a flag that got flipped twice.
 module pharma_track::batch;
 
 use std::option::{Self, Option};
@@ -42,18 +49,31 @@ public struct Checkpoint has copy, drop, store {
     note: String,
 }
 
-/// One full hold+release cycle. `released_by`/`released_at_ms` are `none`
-/// while the hold is still active — this is what makes the record durable:
-/// unlike the `is_held`/`hold_reason`/... fields on `Batch` (which only
-/// describe the *current* hold and get reset on release), every entry here
-/// stays in `hold_history` forever, so a batch that was held and released
-/// three times still shows all three as evidence.
+/// One full hold+release cycle. `released_by`/`released_at_ms`/`release_note`
+/// are `none` while the hold is still active — this is what makes the
+/// record durable: unlike the `is_held`/`hold_reason`/... fields on `Batch`
+/// (which only describe the *current* hold and get reset on release), every
+/// entry here stays in `hold_history` forever, so a batch that was held and
+/// released three times still shows all three as evidence.
 public struct HoldRecord has copy, drop, store {
     held_by: address,
     reason: String,
+    /// Regulatory severity classification — see the `SEVERITY_*` constants.
+    /// Distinguishes "worth a note" from "stop selling this immediately",
+    /// which a single free-text reason can't do consistently across
+    /// different regulators writing their own wording.
+    severity: u8,
+    /// External case/investigation reference (e.g. a regulator's own
+    /// ticket number), so this on-chain record can be cross-referenced
+    /// against off-chain paperwork instead of standing alone.
+    case_reference: String,
     held_at_ms: u64,
     released_by: Option<address>,
     released_at_ms: Option<u64>,
+    /// Why it was safe to release — required precisely because "who and
+    /// when" without "why" is an audit gap: a hold could otherwise be
+    /// lifted with no on-chain justification at all.
+    release_note: Option<String>,
 }
 
 /// On-chain record for one drug batch.
@@ -69,6 +89,8 @@ public struct Batch has key {
     /// is frozen until someone releases the hold.
     is_held: bool,
     hold_reason: String,
+    hold_severity: u8,
+    hold_case_reference: String,
     held_by: address,
     held_at_ms: u64,
     /// Every hold+release cycle this batch has ever been through, oldest
@@ -138,12 +160,15 @@ public struct BatchHeld has copy, drop {
     batch_id: address,
     held_by: address,
     reason: String,
+    severity: u8,
+    case_reference: String,
     held_at_ms: u64,
 }
 
 public struct BatchReleased has copy, drop {
     batch_id: address,
     released_by: address,
+    release_note: String,
     released_at_ms: u64,
 }
 
@@ -175,6 +200,18 @@ const EEmptyHoldReason: u64 = 4;
 const EZeroPrice: u64 = 5;
 const EWrongPayment: u64 = 6;
 const EUnitExpired: u64 = 7;
+const EInvalidSeverity: u64 = 8;
+const EEmptyCaseReference: u64 = 9;
+const EEmptyReleaseNote: u64 = 10;
+
+/// Hold severity classifications, loosely modeled on how regulators
+/// actually grade recalls (e.g. FDA Class I/II/III): the higher the
+/// number, the more urgent. Plain `u8` constants rather than a Move enum
+/// so `place_hold`'s `severity: u8` parameter stays simple to build from
+/// the frontend and to validate with a single range check.
+const SEVERITY_ADVISORY: u8 = 1;
+const SEVERITY_RECALL: u8 = 2;
+const SEVERITY_CRITICAL: u8 = 3;
 
 /// How long a `Unit` stays redeemable after minting, in milliseconds
 /// (10 minutes). Short on purpose: a `Unit` is meant to be minted at the
@@ -215,6 +252,8 @@ public entry fun create_batch(
         checkpoints: vector::empty<Checkpoint>(),
         is_held: false,
         hold_reason: string::utf8(b""),
+        hold_severity: 0,
+        hold_case_reference: string::utf8(b""),
         held_by: @0x0,
         held_at_ms: 0,
         hold_history: vector::empty<HoldRecord>(),
@@ -336,36 +375,54 @@ public entry fun purchase_and_burn(
 /// checkpoints can be added) until someone releases it. Requires a
 /// `RegulatorCap`; the caller's address is also permanently attributed as
 /// `held_by` on top of that capability check.
+///
+/// `severity` must be one of the `SEVERITY_*` constants, and both `reason`
+/// and `case_reference` are mandatory — a hold with no classification or
+/// no external case number to cross-reference isn't useful evidence later.
 public entry fun place_hold(
     _cap: &RegulatorCap,
     batch: &mut Batch,
     reason: vector<u8>,
+    severity: u8,
+    case_reference: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(!batch.is_held, EBatchHeld);
     assert!(reason.length() > 0, EEmptyHoldReason);
+    assert!(
+        severity == SEVERITY_ADVISORY || severity == SEVERITY_RECALL || severity == SEVERITY_CRITICAL,
+        EInvalidSeverity,
+    );
+    assert!(case_reference.length() > 0, EEmptyCaseReference);
 
     let sender = ctx.sender();
     let now = clock.timestamp_ms();
 
     batch.is_held = true;
     batch.hold_reason = string::utf8(reason);
+    batch.hold_severity = severity;
+    batch.hold_case_reference = string::utf8(case_reference);
     batch.held_by = sender;
     batch.held_at_ms = now;
 
     batch.hold_history.push_back(HoldRecord {
         held_by: sender,
         reason: batch.hold_reason,
+        severity,
+        case_reference: batch.hold_case_reference,
         held_at_ms: now,
         released_by: option::none(),
         released_at_ms: option::none(),
+        release_note: option::none(),
     });
 
     event::emit(BatchHeld {
         batch_id: object::uid_to_address(&batch.id),
         held_by: sender,
         reason: batch.hold_reason,
+        severity,
+        case_reference: batch.hold_case_reference,
         held_at_ms: now,
     });
 }
@@ -373,19 +430,26 @@ public entry fun place_hold(
 /// Release a previously placed hold, unfreezing the custody chain.
 /// Requires a `RegulatorCap` — not necessarily the same one that placed
 /// the hold, since caps are fungible proof of role, not per-hold tickets.
+/// `release_note` is mandatory: "who released it and when" without "why
+/// it was safe to" is an audit gap, not a complete record.
 public entry fun release_hold(
     _cap: &RegulatorCap,
     batch: &mut Batch,
+    release_note: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(batch.is_held, EBatchNotHeld);
+    assert!(release_note.length() > 0, EEmptyReleaseNote);
 
     let sender = ctx.sender();
     let now = clock.timestamp_ms();
+    let note = string::utf8(release_note);
 
     batch.is_held = false;
     batch.hold_reason = string::utf8(b"");
+    batch.hold_severity = 0;
+    batch.hold_case_reference = string::utf8(b"");
     batch.held_by = @0x0;
     batch.held_at_ms = 0;
 
@@ -393,10 +457,12 @@ public entry fun release_hold(
     let last_record = batch.hold_history.borrow_mut(last_index);
     last_record.released_by = option::some(sender);
     last_record.released_at_ms = option::some(now);
+    last_record.release_note = option::some(note);
 
     event::emit(BatchReleased {
         batch_id: object::uid_to_address(&batch.id),
         released_by: sender,
+        release_note: note,
         released_at_ms: now,
     });
 }
@@ -442,6 +508,10 @@ public fun is_held(batch: &Batch): bool { batch.is_held }
 
 public fun hold_reason(batch: &Batch): String { batch.hold_reason }
 
+public fun hold_severity(batch: &Batch): u8 { batch.hold_severity }
+
+public fun hold_case_reference(batch: &Batch): String { batch.hold_case_reference }
+
 public fun held_by(batch: &Batch): address { batch.held_by }
 
 public fun held_at_ms(batch: &Batch): u64 { batch.held_at_ms }
@@ -452,6 +522,10 @@ public fun hold_record_held_by(r: &HoldRecord): address { r.held_by }
 
 public fun hold_record_reason(r: &HoldRecord): String { r.reason }
 
+public fun hold_record_severity(r: &HoldRecord): u8 { r.severity }
+
+public fun hold_record_case_reference(r: &HoldRecord): String { r.case_reference }
+
 public fun hold_record_held_at_ms(r: &HoldRecord): u64 { r.held_at_ms }
 
 public fun hold_record_is_released(r: &HoldRecord): bool { r.released_by.is_some() }
@@ -459,6 +533,18 @@ public fun hold_record_is_released(r: &HoldRecord): bool { r.released_by.is_some
 public fun hold_record_released_by(r: &HoldRecord): Option<address> { r.released_by }
 
 public fun hold_record_released_at_ms(r: &HoldRecord): Option<u64> { r.released_at_ms }
+
+public fun hold_record_release_note(r: &HoldRecord): Option<String> { r.release_note }
+
+/// The `severity` value meaning "advisory" — informational, no immediate
+/// sale stoppage implied beyond the hold itself.
+public fun severity_advisory(): u8 { SEVERITY_ADVISORY }
+
+/// The `severity` value meaning "recall" — a defined batch-level recall.
+public fun severity_recall(): u8 { SEVERITY_RECALL }
+
+/// The `severity` value meaning "critical" — stop-sale, most urgent.
+public fun severity_critical(): u8 { SEVERITY_CRITICAL }
 
 public fun unit_batch_id(unit: &Unit): address { unit.batch_id }
 

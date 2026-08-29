@@ -61,9 +61,12 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
     return {
       heldBy: String(r.held_by ?? ''),
       reason: String(r.reason ?? ''),
+      severity: asNumber(r.severity) as HoldRecord['severity'],
+      caseReference: String(r.case_reference ?? ''),
       heldAtMs: asNumber(r.held_at_ms),
       releasedBy: unwrapOption(r.released_by, (v) => String(v)),
       releasedAtMs: unwrapOption(r.released_at_ms, (v) => asNumber(v)),
+      releaseNote: unwrapOption(r.release_note, (v) => String(v)),
     };
   });
 
@@ -76,6 +79,8 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
     checkpoints,
     isHeld: Boolean(fields.is_held),
     holdReason: String(fields.hold_reason ?? ''),
+    holdSeverity: asNumber(fields.hold_severity) as BatchRecord['holdSeverity'],
+    holdCaseReference: String(fields.hold_case_reference ?? ''),
     heldBy: String(fields.held_by ?? ''),
     heldAtMs: asNumber(fields.held_at_ms),
     holdHistory,

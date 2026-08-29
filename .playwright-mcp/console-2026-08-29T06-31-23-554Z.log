@@ -1,0 +1,58 @@
+[     963ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:14335
+[    1154ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5177/favicon.ico:0
+[    9905ms] [ERROR] Access to fetch at 'https://api.gonkarouter.io/v1/chat/completions' from origin 'http://localhost:5177' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5177/?batch=0x6b4728b6565221869fa756393dc8a3b390662cc6f02d020d07b9c6caab0b23cd:0
+[    9906ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://api.gonkarouter.io/v1/chat/completions:0
+[    9908ms] [ERROR] Access to fetch at 'https://api.gonkarouter.io/v1/chat/completions' from origin 'http://localhost:5177' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5177/?batch=0x6b4728b6565221869fa756393dc8a3b390662cc6f02d020d07b9c6caab0b23cd:0
+[    9908ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://api.gonkarouter.io/v1/chat/completions:0
+[    9909ms] [ERROR] Gonka Router call to MiniMaxAI/MiniMax-M2.7 failed: TypeError: Failed to fetch
+    at callGonkaModel (http://localhost:5177/src/lib/gonka.ts:23:20)
+    at checkAnomaly (http://localhost:5177/src/lib/gonka.ts:115:44)
+    at handleCheckAnomaly (http://localhost:5177/src/components/BatchLookup.tsx:42:25)
+    at executeDispatch (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9141:5)
+    at runWithFiberInDEV (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:851:66)
+    at processDispatchQueue (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9167:27)
+    at http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9454:5
+    at batchedUpdates$1 (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:2044:12)
+    at dispatchEventForPluginEventSystem (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9240:4)
+    at dispatchEvent (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:11319:29) @ http://localhost:5177/@vite/client:532
+[    9910ms] [ERROR] Gonka Router call to moonshotai/Kimi-K2.6 failed: TypeError: Failed to fetch
+    at callGonkaModel (http://localhost:5177/src/lib/gonka.ts:23:20)
+    at checkAnomaly (http://localhost:5177/src/lib/gonka.ts:115:77)
+    at handleCheckAnomaly (http://localhost:5177/src/components/BatchLookup.tsx:42:25)
+    at executeDispatch (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9141:5)
+    at runWithFiberInDEV (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:851:66)
+    at processDispatchQueue (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9167:27)
+    at http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9454:5
+    at batchedUpdates$1 (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:2044:12)
+    at dispatchEventForPluginEventSystem (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9240:4)
+    at dispatchEvent (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:11319:29) @ http://localhost:5177/@vite/client:532
+[   13081ms] [ERROR] Access to fetch at 'https://api.gonkarouter.io/v1/chat/completions' from origin 'http://localhost:5177' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5177/?batch=0x6b4728b6565221869fa756393dc8a3b390662cc6f02d020d07b9c6caab0b23cd:0
+[   13081ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://api.gonkarouter.io/v1/chat/completions:0
+[   13081ms] [ERROR] Access to fetch at 'https://api.gonkarouter.io/v1/chat/completions' from origin 'http://localhost:5177' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5177/?batch=0x6b4728b6565221869fa756393dc8a3b390662cc6f02d020d07b9c6caab0b23cd:0
+[   13081ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://api.gonkarouter.io/v1/chat/completions:0
+[   13082ms] [ERROR] Gonka Router call to MiniMaxAI/MiniMax-M2.7 failed: TypeError: Failed to fetch
+    at callGonkaModel (http://localhost:5177/src/lib/gonka.ts:23:20)
+    at checkAnomaly (http://localhost:5177/src/lib/gonka.ts:115:44)
+    at handleCheckAnomaly (http://localhost:5177/src/components/BatchLookup.tsx:42:25)
+    at executeDispatch (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9141:5)
+    at runWithFiberInDEV (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:851:66)
+    at processDispatchQueue (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9167:27)
+    at http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9454:5
+    at batchedUpdates$1 (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:2044:12)
+    at dispatchEventForPluginEventSystem (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9240:4)
+    at dispatchEvent (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:11319:29) @ http://localhost:5177/@vite/client:532
+[   13082ms] [ERROR] Gonka Router call to moonshotai/Kimi-K2.6 failed: TypeError: Failed to fetch
+    at callGonkaModel (http://localhost:5177/src/lib/gonka.ts:23:20)
+    at checkAnomaly (http://localhost:5177/src/lib/gonka.ts:115:77)
+    at handleCheckAnomaly (http://localhost:5177/src/components/BatchLookup.tsx:42:25)
+    at executeDispatch (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9141:5)
+    at runWithFiberInDEV (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:851:66)
+    at processDispatchQueue (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9167:27)
+    at http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9454:5
+    at batchedUpdates$1 (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:2044:12)
+    at dispatchEventForPluginEventSystem (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:9240:4)
+    at dispatchEvent (http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=7f5f9276:11319:29) @ http://localhost:5177/@vite/client:532
+[  114827ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5177/@vite/client:1002
+[  122358ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=3f1dffa2:14335
+[  148465ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5177/@vite/client:1002
+[  149540ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5177/node_modules/.vite/deps/react-dom_client.js?v=1cfb849f:14335

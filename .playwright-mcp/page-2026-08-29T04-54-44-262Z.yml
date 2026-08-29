@@ -1,0 +1,39 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: Rx
+      - generic [ref=e7]:
+        - heading "PharmaTrust" [level=1] [ref=e8]
+        - paragraph [ref=e9]: Batch verification register
+    - navigation "Sections" [ref=e10]:
+      - button "Register batch Manufacturer" [ref=e11] [cursor=pointer]:
+        - generic [ref=e12]: Register batch
+        - generic [ref=e13]: Manufacturer
+      - button "Scan checkpoint Distributor / pharmacy" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: Scan checkpoint
+        - generic [ref=e16]: Distributor / pharmacy
+      - button "Verify a product Anyone" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: Verify a product
+        - generic [ref=e19]: Anyone
+      - button "Create sale QR Pharmacy" [ref=e20] [cursor=pointer]:
+        - generic [ref=e21]: Create sale QR
+        - generic [ref=e22]: Pharmacy
+      - button "Pay & dispense Customer" [ref=e23] [cursor=pointer]:
+        - generic [ref=e24]: Pay & dispense
+        - generic [ref=e25]: Customer
+    - button "Connect Wallet" [ref=e26]
+  - generic [ref=e27]:
+    - heading "Register a new batch" [level=2] [ref=e28]
+    - paragraph [ref=e29]: Called once by the manufacturer. This creates a shared object on Sui that every later checkpoint — distributor, pharmacy, and so on — will attach to.
+    - paragraph [ref=e30]: Connect a wallet to register a batch.
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - generic [ref=e34]: Batch code
+          - textbox "Batch code" [disabled] [ref=e35]:
+            - /placeholder: e.g. AMX-2026-0417
+        - generic [ref=e36]:
+          - generic [ref=e37]: Product name
+          - textbox "Product name" [disabled] [ref=e38]:
+            - /placeholder: e.g. Amoxicillin 500mg
+      - button "Register batch" [disabled] [ref=e39]

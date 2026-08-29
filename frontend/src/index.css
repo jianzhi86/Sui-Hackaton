@@ -326,6 +326,37 @@ a:focus-visible {
   border-radius: 4px;
 }
 
+/* ---------- Hold severity badges ---------- */
+
+.severity-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+}
+
+.severity-advisory {
+  color: var(--ink-soft);
+  background: var(--paper);
+  border-color: var(--line-strong);
+}
+
+.severity-recall {
+  color: var(--flag-amber);
+  background: var(--flag-amber-soft);
+  border-color: var(--flag-amber);
+}
+
+.severity-critical {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
 /* ---------- Code chips (batch codes, object ids, addresses) ---------- */
 
 .code-chip {
@@ -519,6 +550,43 @@ a:focus-visible {
 
 .scan-target {
   margin: 12px 0;
+}
+
+/* ---------- Printable per-item verify QR sheet ---------- */
+
+.print-sheet {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.qr-card-compact {
+  padding: 12px;
+  gap: 8px;
+}
+
+.qr-card-compact svg {
+  padding: 6px;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-sheet,
+  .print-sheet * {
+    visibility: visible;
+  }
+  .print-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+  .no-print {
+    display: none !important;
+  }
 }
 
 #qr-reader {

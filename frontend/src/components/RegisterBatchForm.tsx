@@ -4,6 +4,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { QrCodeCard } from './QrCodeCard';
+import { ItemQrSheet } from './ItemQrSheet';
 
 interface CreatedObjectChange {
   type: string;
@@ -113,6 +114,7 @@ export function RegisterBatchForm() {
             label="Scan to verify this batch"
             helper="Anyone who scans this code lands on the public verification page for this exact batch."
           />
+          <ItemQrSheet batchId={createdBatchId} batchCode={batchCode.trim()} />
         </div>
       )}
     </section>

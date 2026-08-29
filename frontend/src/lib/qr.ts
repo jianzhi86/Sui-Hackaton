@@ -30,3 +30,20 @@ export function extractUnitId(decoded: string): string {
   }
   return decoded.trim();
 }
+
+/**
+ * Per-item verify QRs (one per physical package, printed onto that exact
+ * package) encode `?batch=<objectId>&serial=<n>`. The serial isn't a
+ * separate on-chain object — it's a print/label-tracking number layered
+ * on top of the one shared `Batch` every item in a print run belongs to.
+ * Returns `null` if the scanned text carries no serial (e.g. a plain
+ * batch QR without one).
+ */
+export function extractSerial(decoded: string): string | null {
+  try {
+    const url = new URL(decoded);
+    return url.searchParams.get('serial');
+  } catch {
+    return null;
+  }
+}

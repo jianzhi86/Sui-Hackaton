@@ -11,21 +11,25 @@ export type Tab = 'register' | 'scan' | 'verify' | 'mint' | 'pay';
 export default function App() {
   const [tab, setTab] = useState<Tab>('register');
   const [initialBatchId, setInitialBatchId] = useState<string | undefined>(undefined);
+  const [initialSerial, setInitialSerial] = useState<string | undefined>(undefined);
   const [initialUnitId, setInitialUnitId] = useState<string | undefined>(undefined);
 
-  // A scanned "final" QR code encodes `?batch=<objectId>` — land directly on
-  // the public verify tab with that batch pre-loaded, no extra taps needed.
+  // A scanned "final" QR code encodes `?batch=<objectId>` (optionally with
+  // `&serial=<n>` for a per-package verify label) — land directly on the
+  // public verify tab with that batch pre-loaded, no extra taps needed.
   // A single-use sale QR instead encodes `?unit=<objectId>` and lands on the
   // pay tab so a customer can scan-and-pay in one motion.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('batch');
+    const serialFromUrl = params.get('serial');
     const unitFromUrl = params.get('unit');
     if (unitFromUrl) {
       setInitialUnitId(unitFromUrl);
       setTab('pay');
     } else if (fromUrl) {
       setInitialBatchId(fromUrl);
+      setInitialSerial(serialFromUrl ?? undefined);
       setTab('verify');
     }
   }, []);
@@ -35,7 +39,7 @@ export default function App() {
       <Header active={tab} onNavigate={setTab} />
       {tab === 'register' && <RegisterBatchForm />}
       {tab === 'scan' && <CheckpointScanner />}
-      {tab === 'verify' && <BatchLookup initialBatchId={initialBatchId} />}
+      {tab === 'verify' && <BatchLookup initialBatchId={initialBatchId} initialSerial={initialSerial} />}
       {tab === 'mint' && <MintUnitForm />}
       {tab === 'pay' && <PurchaseUnitScanner initialUnitId={initialUnitId} />}
     </div>

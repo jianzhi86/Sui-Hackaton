@@ -6,12 +6,21 @@ export interface Checkpoint {
   note: string;
 }
 
+/** Mirrors the `SEVERITY_*` constants in `pharma_track.move`. */
+export type HoldSeverity = 1 | 2 | 3;
+export const SEVERITY_ADVISORY: HoldSeverity = 1;
+export const SEVERITY_RECALL: HoldSeverity = 2;
+export const SEVERITY_CRITICAL: HoldSeverity = 3;
+
 export interface HoldRecord {
   heldBy: string;
   reason: string;
+  severity: HoldSeverity;
+  caseReference: string;
   heldAtMs: number;
   releasedBy: string | null;
   releasedAtMs: number | null;
+  releaseNote: string | null;
 }
 
 export interface BatchRecord {
@@ -23,6 +32,8 @@ export interface BatchRecord {
   checkpoints: Checkpoint[];
   isHeld: boolean;
   holdReason: string;
+  holdSeverity: HoldSeverity | 0;
+  holdCaseReference: string;
   heldBy: string;
   heldAtMs: number;
   holdHistory: HoldRecord[];

@@ -105,11 +105,21 @@ fun test_hold_blocks_checkpoint_then_release_allows_it() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
-        batch::place_hold(&cap, &mut shared_batch, b"Seal broken on arrival", &clock, ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Seal broken on arrival",
+            batch::severity_recall(),
+            b"CASE-2026-001",
+            &clock,
+            ctx,
+        );
 
         assert!(batch::is_held(&shared_batch), 0);
         assert!(batch::hold_reason(&shared_batch) == string::utf8(b"Seal broken on arrival"), 1);
         assert!(batch::held_by(&shared_batch) == MANUFACTURER, 2);
+        assert!(batch::hold_severity(&shared_batch) == batch::severity_recall(), 6);
+        assert!(batch::hold_case_reference(&shared_batch) == string::utf8(b"CASE-2026-001"), 7);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
@@ -128,7 +138,7 @@ fun test_hold_blocks_checkpoint_then_release_allows_it() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
-        batch::release_hold(&cap, &mut shared_batch, &clock, ctx);
+        batch::release_hold(&cap, &mut shared_batch, b"Reseal verified against manifest", &clock, ctx);
         assert!(!batch::is_held(&shared_batch), 3);
 
         clock.destroy_for_testing();
@@ -163,7 +173,15 @@ fun test_add_checkpoint_aborts_while_held() {
         let cap = scenario.take_from_sender<RegulatorCap>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::place_hold(&cap, &mut shared_batch, b"Recalled by regulator", &clock, ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Recalled by regulator",
+            batch::severity_critical(),
+            b"CASE-2026-002",
+            &clock,
+            ctx,
+        );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         scenario.return_to_sender(cap);
@@ -197,7 +215,15 @@ fun test_place_hold_without_cap_fails() {
         let cap = scenario.take_from_sender<RegulatorCap>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::place_hold(&cap, &mut shared_batch, b"Trying without a cap", &clock, ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Trying without a cap",
+            batch::severity_advisory(),
+            b"CASE-2026-003",
+            &clock,
+            ctx,
+        );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         scenario.return_to_sender(cap);
@@ -229,7 +255,15 @@ fun test_mint_regulator_cap_lets_new_holder_place_hold() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
-        batch::place_hold(&cap, &mut shared_batch, b"Newly-onboarded regulator hold", &clock, ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Newly-onboarded regulator hold",
+            batch::severity_advisory(),
+            b"CASE-2026-004",
+            &clock,
+            ctx,
+        );
         assert!(batch::is_held(&shared_batch), 0);
         assert!(batch::held_by(&shared_batch) == PHARMACY, 1);
 
@@ -253,7 +287,15 @@ fun test_hold_history_records_every_cycle() {
         let cap = scenario.take_from_sender<RegulatorCap>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::place_hold(&cap, &mut shared_batch, b"First suspected tamper", &clock, ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"First suspected tamper",
+            batch::severity_advisory(),
+            b"CASE-2026-005",
+            &clock,
+            ctx,
+        );
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         scenario.return_to_sender(cap);
@@ -264,7 +306,7 @@ fun test_hold_history_records_every_cycle() {
         let cap = scenario.take_from_sender<RegulatorCap>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::release_hold(&cap, &mut shared_batch, &clock, ctx);
+        batch::release_hold(&cap, &mut shared_batch, b"False alarm, seal intact on inspection", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         scenario.return_to_sender(cap);
@@ -277,7 +319,15 @@ fun test_hold_history_records_every_cycle() {
         let cap = scenario.take_from_sender<RegulatorCap>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::place_hold(&cap, &mut shared_batch, b"Second, still under investigation", &clock, ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Second, still under investigation",
+            batch::severity_critical(),
+            b"CASE-2026-006",
+            &clock,
+            ctx,
+        );
 
         let history = batch::hold_history(&shared_batch);
         assert!(history.length() == 2, 0);
@@ -286,6 +336,13 @@ fun test_hold_history_records_every_cycle() {
         assert!(batch::hold_record_reason(first) == string::utf8(b"First suspected tamper"), 1);
         assert!(batch::hold_record_is_released(first), 2);
         assert!(batch::hold_record_released_by(first) == option::some(MANUFACTURER), 3);
+        assert!(batch::hold_record_severity(first) == batch::severity_advisory(), 7);
+        assert!(batch::hold_record_case_reference(first) == string::utf8(b"CASE-2026-005"), 8);
+        assert!(
+            batch::hold_record_release_note(first)
+                == option::some(string::utf8(b"False alarm, seal intact on inspection")),
+            9,
+        );
 
         let second = history.borrow(1);
         assert!(
@@ -294,7 +351,101 @@ fun test_hold_history_records_every_cycle() {
         );
         assert!(!batch::hold_record_is_released(second), 5);
         assert!(batch::hold_record_released_by(second) == option::none(), 6);
+        assert!(batch::hold_record_severity(second) == batch::severity_critical(), 10);
+        assert!(batch::hold_record_release_note(second) == option::none(), 11);
 
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 8 == batch::EInvalidSeverity.
+#[test, expected_failure(abort_code = 8)]
+fun test_place_hold_rejects_invalid_severity() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-011");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        // 99 isn't one of SEVERITY_ADVISORY/RECALL/CRITICAL.
+        batch::place_hold(&cap, &mut shared_batch, b"Bad severity", 99, b"CASE-2026-007", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 9 == batch::EEmptyCaseReference.
+#[test, expected_failure(abort_code = 9)]
+fun test_place_hold_rejects_empty_case_reference() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-012");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Missing case reference",
+            batch::severity_advisory(),
+            b"",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 10 == batch::EEmptyReleaseNote.
+#[test, expected_failure(abort_code = 10)]
+fun test_release_hold_rejects_empty_note() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-013");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Needs a release note test",
+            batch::severity_advisory(),
+            b"CASE-2026-008",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::release_hold(&cap, &mut shared_batch, b"", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         scenario.return_to_sender(cap);

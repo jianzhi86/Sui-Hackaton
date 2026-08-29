@@ -1,0 +1,90 @@
+- generic [ref=f4e3]:
+  - banner [ref=f4e4]:
+    - generic [ref=f4e5]:
+      - generic [ref=f4e6]: Rx
+      - generic [ref=f4e7]:
+        - heading "PharmaTrust" [level=1] [ref=f4e8]
+        - paragraph [ref=f4e9]: Batch verification register
+    - navigation "Sections" [ref=f4e10]:
+      - button "Register batch Manufacturer" [ref=f4e11] [cursor=pointer]:
+        - generic [ref=f4e12]: Register batch
+        - generic [ref=f4e13]: Manufacturer
+      - button "Scan checkpoint Distributor / pharmacy" [ref=f4e14] [cursor=pointer]:
+        - generic [ref=f4e15]: Scan checkpoint
+        - generic [ref=f4e16]: Distributor / pharmacy
+      - button "Verify a product Anyone" [ref=f4e17] [cursor=pointer]:
+        - generic [ref=f4e18]: Verify a product
+        - generic [ref=f4e19]: Anyone
+      - button "Create sale QR Pharmacy" [ref=f4e20] [cursor=pointer]:
+        - generic [ref=f4e21]: Create sale QR
+        - generic [ref=f4e22]: Pharmacy
+      - button "Pay & dispense Customer" [ref=f4e23] [cursor=pointer]:
+        - generic [ref=f4e24]: Pay & dispense
+        - generic [ref=f4e25]: Customer
+    - button "Connect Wallet" [ref=f4e26]
+  - generic [ref=f4e27]:
+    - heading "Verify a product" [level=2] [ref=f4e28]
+    - paragraph [ref=f4e29]: Paste a batch object ID, or scan the QR code on the packaging. This reads straight from Sui — no wallet or login required to check a product.
+    - button "Scan QR with camera" [ref=f4e31] [cursor=pointer]
+    - generic [ref=f4e32]:
+      - generic [ref=f4e33]:
+        - generic [ref=f4e34]: Batch object ID
+        - textbox "Batch object ID" [ref=f4e35]:
+          - /placeholder: 0x…
+          - text: "0x6b4728b6565221869fa756393dc8a3b390662cc6f02d020d07b9c6caab0b23cd"
+      - button "Look up" [ref=f4e36] [cursor=pointer]
+    - generic [ref=f4e38]:
+      - heading "panadol 500mg" [level=3] [ref=f4e39]
+      - paragraph [ref=f4e40]: Batch AMX 2026/8/29 · registered by 0xecba35a84722456a76a0e9ef9adf7976e5abcb7ecf0af74e139feeceb07adfcd
+      - generic [ref=f4e42]:
+        - generic [ref=f4e43]:
+          - generic [ref=f4e44]: Place a hold on this batch
+          - textbox "Place a hold on this batch" [disabled] [ref=f4e45]:
+            - /placeholder: e.g. Suspected counterfeit — seal mismatch
+        - generic [ref=f4e46]:
+          - generic [ref=f4e47]:
+            - generic [ref=f4e48]: Severity
+            - combobox "Severity" [disabled] [ref=f4e49]:
+              - option "Advisory"
+              - option "Recall" [selected]
+              - option "Critical — stop sale"
+          - generic [ref=f4e50]:
+            - generic [ref=f4e51]: Case / investigation reference
+            - textbox "Case / investigation reference" [disabled] [ref=f4e52]:
+              - /placeholder: e.g. MOH-2026-0417
+        - button "Place hold" [disabled] [ref=f4e53]
+        - paragraph [ref=f4e54]: Connect a wallet to place a hold.
+      - generic [ref=f4e56]:
+        - generic [ref=f4e57]: "0"
+        - generic [ref=f4e58]: Manufactured
+        - generic [ref=f4e59]: 8/29/2026, 2:19:47 PM
+      - button "Run AI verification" [ref=f4e60] [cursor=pointer]
+      - generic [ref=f4e69]:
+        - generic [ref=f4e70]:
+          - heading "Transparency report" [level=3] [ref=f4e71]
+          - generic [ref=f4e72]: Needs review · 55/100
+        - paragraph [ref=f4e73]: "Rule-based findings (computed locally, before any AI call):"
+        - list [ref=f4e74]:
+          - listitem [ref=f4e75]: No checkpoints recorded yet — nothing has been scanned since manufacture.
+        - generic [ref=f4e76]:
+          - generic [ref=f4e77]:
+            - generic [ref=f4e78]:
+              - generic [ref=f4e79]: MiniMaxAI/MiniMax-M2.7
+              - generic [ref=f4e80]: 15/100
+            - generic [ref=f4e81]: clear
+            - paragraph [ref=f4e82]: The batch code and timestamp are consistent, and the absence of custody checkpoints is expected for a newly manufactured product that has not yet been scanned. No signs of duplication, tampering, or implausible routing were detected.
+            - paragraph [ref=f4e83]: "Gonka request ID: devshard-65256-151"
+          - generic [ref=f4e84]:
+            - generic [ref=f4e85]:
+              - generic [ref=f4e86]: moonshotai/Kimi-K2.6
+              - generic [ref=f4e87]: 95/100
+            - generic [ref=f4e88]: flag
+            - paragraph [ref=f4e89]: The creation timestamp of 2026-08-29 reflects a future date, which constitutes impossible timing and strongly suggests a falsified or tampered record. While the absence of custody checkpoints is noted, the anachronistic manufacture date alone is sufficient to invalidate the chain of custody.
+            - paragraph [ref=f4e90]: "Gonka request ID: devshard-65217-377"
+      - group [ref=f4e62]:
+        - generic "Generate one verify QR per physical package (for printing)" [ref=f4e63] [cursor=pointer]
+        - generic [ref=f4e64]:
+          - generic [ref=f4e65]:
+            - generic [ref=f4e66]: How many packages need a label?
+            - spinbutton "How many packages need a label?" [ref=f4e67]: "10"
+          - button "Generate 10 QR codes" [ref=f4e68] [cursor=pointer]
