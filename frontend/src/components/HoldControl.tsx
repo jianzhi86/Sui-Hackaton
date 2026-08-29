@@ -27,6 +27,36 @@ function SeverityBadge({ severity }: { severity: HoldSeverity }) {
   return <span className={SEVERITY_CLASSES[severity]}>{SEVERITY_LABELS[severity]}</span>;
 }
 
+/**
+ * How long a hold can sit active before the UI flags it as overdue for
+ * review. Scaled by severity — a critical stop-sale hold going a full week
+ * without anyone revisiting it is a much bigger problem than an advisory
+ * doing the same. This is purely a UI nudge (nothing on-chain enforces a
+ * review deadline); it exists so nothing freezes and gets forgotten.
+ */
+const STALE_THRESHOLD_MS: Record<HoldSeverity, number> = {
+  3: 24 * 60 * 60 * 1000, // Critical: 1 day
+  2: 7 * 24 * 60 * 60 * 1000, // Recall: 7 days
+  1: 30 * 24 * 60 * 60 * 1000, // Advisory: 30 days
+};
+
+function formatDuration(ms: number): string {
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+  if (days >= 1) return `${days} day${days === 1 ? '' : 's'}`;
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  return `${hours} hour${hours === 1 ? '' : 's'}`;
+}
+
+function StaleHoldBadge({ heldAtMs, severity }: { heldAtMs: number; severity: HoldSeverity }) {
+  const age = Date.now() - heldAtMs;
+  if (age < STALE_THRESHOLD_MS[severity]) return null;
+  return (
+    <span className="severity-badge severity-critical" title="No on-chain deadline enforces this — it's a UI nudge only.">
+      ⏰ Overdue for review ({formatDuration(age)} since held)
+    </span>
+  );
+}
+
 interface HoldControlProps {
   batch: BatchRecord;
   onChanged: () => void;
@@ -146,22 +176,149 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     );
   }
 
+  function handleProposeRelease(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    if (!releaseNote.trim()) {
+      setError('A release note is required — explain why it is safe to unfreeze this batch.');
+      return;
+    }
+    if (!capId) return;
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: target('propose_release'),
+      arguments: [
+        tx.object(capId),
+        tx.object(batch.objectId),
+        tx.pure.string(releaseNote.trim()),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
+      {
+        onSuccess: () => {
+          setReleaseNote('');
+          setConfirmingRelease(false);
+          onChanged();
+        },
+        onError: (err) => setError(err.message),
+      },
+    );
+  }
+
+  function handleConfirmRelease() {
+    setError(null);
+    if (!capId) return;
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: target('confirm_release'),
+      arguments: [tx.object(capId), tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
+    });
+
+    signAndExecute(
+      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
+      {
+        onSuccess: () => onChanged(),
+        onError: (err) => setError(err.message),
+      },
+    );
+  }
+
   const canAct = Boolean(account && capId && !capLoading);
+  const isCritical = batch.holdSeverity === SEVERITY_CRITICAL;
+  const isProposer = Boolean(account && batch.pendingReleaseBy === account.address);
 
   return (
     <>
       {batch.isHeld ? (
         <div className="hold-banner hold-banner-active">
-          <strong>⚠ ON HOLD</strong> <SeverityBadge severity={batch.holdSeverity as HoldSeverity} />
+          <strong>⚠ ON HOLD</strong> <SeverityBadge severity={batch.holdSeverity as HoldSeverity} />{' '}
+          <StaleHoldBadge heldAtMs={batch.heldAtMs} severity={batch.holdSeverity as HoldSeverity} />
           <p>
             Reason: "{batch.holdReason}" — case <span className="code-chip">{batch.holdCaseReference}</span>{' '}
             — placed by <span className="code-chip">{batch.heldBy}</span> at{' '}
-            {new Date(batch.heldAtMs).toLocaleString()}. No new checkpoints can be recorded until
-            this is released.
+            {new Date(batch.heldAtMs).toLocaleString()}. No new checkpoints, sale QRs, or payments
+            can happen until this is released.
           </p>
           {error && <p className="error-text">{error}</p>}
 
-          {!confirmingRelease ? (
+          {isCritical ? (
+            <>
+              <p className="helper-text">
+                Critical holds can't be released by one person — this needs a second, different
+                Regulator Cap holder to independently confirm.
+              </p>
+
+              {batch.pendingReleaseBy ? (
+                <div>
+                  <p className="helper-text">
+                    Release proposed by <span className="code-chip">{batch.pendingReleaseBy}</span>:
+                    "{batch.pendingReleaseNote}". Awaiting confirmation from a <em>different</em>{' '}
+                    regulator.
+                  </p>
+                  {isProposer ? (
+                    <p className="error-text">
+                      You proposed this release — a different Regulator Cap holder must confirm it,
+                      not you.
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={handleConfirmRelease}
+                      disabled={!canAct || isPending}
+                    >
+                      {isPending ? 'Confirming…' : 'Confirm release (as second regulator)'}
+                    </button>
+                  )}
+                </div>
+              ) : !confirmingRelease ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setConfirmingRelease(true)}
+                  disabled={!canAct || isPending}
+                >
+                  Propose release
+                </button>
+              ) : (
+                <form onSubmit={handleProposeRelease}>
+                  <div className="field">
+                    <label htmlFor="releaseNote">Why is it safe to release this hold?</label>
+                    <input
+                      id="releaseNote"
+                      value={releaseNote}
+                      onChange={(e) => setReleaseNote(e.target.value)}
+                      placeholder="e.g. Independent lab confirmed the product is genuine"
+                      disabled={!canAct || isPending}
+                      autoFocus
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-danger" disabled={!canAct || isPending}>
+                    {isPending ? 'Proposing…' : 'Propose release'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => {
+                      setConfirmingRelease(false);
+                      setReleaseNote('');
+                      setError(null);
+                    }}
+                    disabled={isPending}
+                  >
+                    Cancel
+                  </button>
+                </form>
+              )}
+            </>
+          ) : !confirmingRelease ? (
             <button
               type="button"
               className="btn btn-secondary"
@@ -290,8 +447,15 @@ function HoldHistoryList({ history }: { history: BatchRecord['holdHistory'] }) {
             <div className="ledger-note">"{h.reason}"</div>
             {h.releasedBy !== null && (
               <div className="helper-text">
-                Released by <span className="code-chip">{h.releasedBy}</span> at{' '}
-                {h.releasedAtMs !== null ? new Date(h.releasedAtMs).toLocaleString() : 'unknown'}
+                {h.coReleasedBy ? (
+                  <>
+                    Release proposed by <span className="code-chip">{h.coReleasedBy}</span>, confirmed
+                    by <span className="code-chip">{h.releasedBy}</span>
+                  </>
+                ) : (
+                  <>Released by <span className="code-chip">{h.releasedBy}</span></>
+                )}{' '}
+                at {h.releasedAtMs !== null ? new Date(h.releasedAtMs).toLocaleString() : 'unknown'}
                 {h.releaseNote && <> — "{h.releaseNote}"</>}
               </div>
             )}

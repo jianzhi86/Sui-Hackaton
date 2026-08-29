@@ -11,7 +11,7 @@ A Sui + AI project built for a hackathon, targeting:
 
 1. A manufacturer registers a drug **batch** on Sui — a shared object every later party can attach to.
 2. Distributors/pharmacies add **checkpoints** as the batch physically moves — permanently attributed to whoever's wallet signed it, no way to forge who touched it.
-3. A regulator can **place a hold** (with a severity level, a case reference, and — on release — a mandatory explanation) to freeze the custody chain during an investigation or recall.
+3. A regulator can **place a hold** (with a severity level, a case reference, and — on release — a mandatory explanation) to freeze the custody chain during an investigation or recall. A hold doesn't just freeze paperwork: it blocks new sale QRs from being minted *and* blocks payment on ones already minted, so a recalled batch can't keep selling on a technicality. **Critical** holds go further — releasing one requires two different regulators (propose + confirm), not a single signer.
 4. Anyone can **verify** a batch with no wallet at all, see its full history, and run a live **AI cross-check**: two independent models (via Gonka Router) reason over the custody timeline in parallel and flag impossible timing, skipped steps, or duplicate scans.
 5. A pharmacy can **mint a single-use sale QR** at checkout; a customer scans and **pays** in the same transaction — the on-chain object is deleted the instant it's paid, so the exact same QR can never be charged twice, and it expires after 10 minutes if unused.
 6. A manufacturer/pharmacy can **generate and print** a batch of individually-numbered verify QR codes — one per physical package — for labeling a real print run.
@@ -21,7 +21,7 @@ A Sui + AI project built for a hackathon, targeting:
 ```
 contract/                     Sui Move package (the on-chain half)
   sources/pharma_track.move   Batch, Checkpoint, HoldRecord, RegulatorCap, Unit
-  tests/pharma_track_tests.move  14 unit tests (test with `sui move test`)
+  tests/pharma_track_tests.move  23 unit tests (test with `sui move test`)
   Move.toml / Published.toml
 
 frontend/                     React + Vite app (the off-chain half)
@@ -38,13 +38,13 @@ frontend/                     React + Vite app (the off-chain half)
 |---|---|
 | `Batch` (Move) | Shared object created by `create_batch`; accumulates `Checkpoint`s via `add_checkpoint` (no access gate — trust comes from public attribution, not permissioning) |
 | `RegulatorCap` (Move) | Capability object required to place/release holds; minted once at publish, holders can mint more to onboard other regulators |
-| Hold system | `place_hold` requires a severity (Advisory / Recall / Critical), a mandatory case reference, and freezes `add_checkpoint`; `release_hold` requires a mandatory release note explaining why it's safe. Every cycle is kept forever in `hold_history`, even after release |
-| `Unit` (Move) | A single-use, shared "sale ticket" for one physical package. `mint_unit` creates it with a price and a 10-minute expiry; `purchase_and_burn` takes exact payment, forwards it to the manufacturer, and **deletes the object** — the QR pointing at it becomes permanently unredeemable, which is what makes it single-use (not a flag that could be bypassed, an object that stops existing) |
+| Hold system | `place_hold` requires a severity (Advisory / Recall / Critical), a mandatory case reference, and freezes `add_checkpoint`, `mint_unit`, and `purchase_and_burn`. `release_hold` requires a mandatory release note; **Critical** holds reject `release_hold` outright and require `propose_release` + `confirm_release` from two *different* `RegulatorCap` holders. Every cycle is kept forever in `hold_history`, even after release, including who proposed vs. who confirmed |
+| `Unit` (Move) | A single-use, shared "sale ticket" for one physical package. `mint_unit` creates it with a price and a 10-minute expiry (aborts if the batch is held); `purchase_and_burn` takes the `Batch` too, re-checks it isn't held *at redemption time* (not just at mint time), takes exact payment, forwards it to the manufacturer, and **deletes the object** — the QR pointing at it becomes permanently unredeemable, which is what makes it single-use (not a flag that could be bypassed, an object that stops existing) |
 | Register tab | Manufacturer calls `create_batch`; also generates the printable per-item verify QR sheet |
 | Scan tab | Distributor/pharmacy calls `add_checkpoint` |
-| Verify tab | Public, no wallet needed — reads the object straight from Sui, shows the ledger + hold history, runs the AI check, and can also generate item QR codes for an existing batch |
-| Create sale QR tab | Pharmacy calls `mint_unit` at checkout |
-| Pay & dispense tab | Customer scans/pastes the unit ID, sees a live countdown, pays and burns it in one transaction |
+| Verify tab | Public, no wallet needed — reads the object straight from Sui, shows the ledger + hold history, runs the AI check, and can also generate item QR codes for an existing batch. Scanning a printed item QR (with a serial) whose batch is currently held shows a loud "do not use this medicine" banner, even though that specific package's QR was printed before the hold existed |
+| Create sale QR tab | Pharmacy calls `mint_unit` at checkout; disabled with a clear warning if the batch is on hold |
+| Pay & dispense tab | Customer scans/pastes the unit ID, sees a live countdown, pays and burns it in one transaction; disabled with a clear warning if the batch has gone on hold since the QR was minted |
 | `src/lib/gonka.ts` | Sends the custody timeline to **two** Gonka-hosted models in parallel via `api/gonka.ts`, reports agreement/disagreement + a combined risk score + per-model Gonka Request IDs |
 | `src/lib/chainAnalysis.ts` | Zero-cost local checks (timing gaps, skipped steps, duplicate scans) that run before *and independently of* the AI call, so the demo never goes blank on bad wifi |
 | `api/gonka.ts` | Server-side proxy to `api.gonkarouter.io` — required because that API sends no CORS headers (a browser cannot call it directly) and because the API key must never ship inside client-bundled code |
@@ -122,8 +122,10 @@ Open the printed `localhost` URL, connect your wallet, and you're ready to go th
 1. **Register batch** (manufacturer) — enter a batch code + product name, sign. You get a QR encoding a public verify link, and can immediately generate a sheet of individually-numbered per-item QR codes to print.
 2. **Scan checkpoint** (distributor/pharmacy) — paste or scan a batch ID, pick a role, add a location/note, sign. Blocked while the batch is on hold.
 3. **Verify a product** (anyone, no wallet needed) — paste/scan a batch ID (or a printed item QR, which shows its package number too). Shows the full checkpoint ledger and hold history. From here, a `RegulatorCap` holder can place/release holds, and anyone can run the AI check or generate more item QR codes.
-4. **Create sale QR** (pharmacy) — paste a batch ID and set a price in SUI. Generates a QR that's valid for exactly 10 minutes and exactly one payment. Mint this at the register, not in advance — a long-lived unpaid QR sitting on a shelf is easy to photograph and clone; a code that only exists for one checkout isn't.
-5. **Pay & dispense** (customer) — scan/paste a unit ID, see the live price and countdown, pay. The object is deleted the instant payment succeeds — scanning the same QR again correctly shows "already paid for and burned," even for the person who just paid.
+   - Placing a **Critical** hold and later releasing it needs two people: one `RegulatorCap` holder clicks "Propose release" with a note, then a *different* one clicks "Confirm release" — the UI blocks the same wallet from doing both.
+   - A hold sitting active past a severity-scaled threshold (1 day for Critical, 7 for Recall, 30 for Advisory) shows an "⏰ Overdue for review" badge — a UI nudge only, nothing on-chain enforces a deadline.
+4. **Create sale QR** (pharmacy) — paste a batch ID and set a price in SUI. Generates a QR that's valid for exactly 10 minutes and exactly one payment. Mint this at the register, not in advance — a long-lived unpaid QR sitting on a shelf is easy to photograph and clone; a code that only exists for one checkout isn't. Blocked if the batch is on hold.
+5. **Pay & dispense** (customer) — scan/paste a unit ID, see the live price and countdown, pay. The object is deleted the instant payment succeeds — scanning the same QR again correctly shows "already paid for and burned," even for the person who just paid. Blocked if the batch has gone on hold since the QR was minted.
 
 ## Testing
 
@@ -144,6 +146,8 @@ Manual end-to-end smoke test (needs a funded testnet wallet): register a batch �
 - **Single-use QR = object deletion, not a flag.** `purchase_and_burn` deletes the `Unit` object outright. A flag-based "already sold" check can have race conditions or be bypassed by a bug; an object that's been deleted from chain state cannot be referenced by any future transaction, full stop.
 - **10-minute expiry on sale QRs.** Mitigates (doesn't eliminate) the obvious attack on any printed/displayed QR: a counterfeiter photographing it and racing to redeem it before the real buyer does. Minting at the point of sale rather than pre-printing weeks in advance shrinks the window this attack has to work in.
 - **Mandatory severity + case reference + release note on holds.** A hold with no classification, no external case to cross-reference, and no stated reason for lifting it isn't an audit record — it's a flag that got flipped twice. All three are required inputs, not optional metadata.
+- **A hold blocks sales, not just custody.** Without this, a batch could be placed under a "Critical — stop sale" hold and someone could still mint and sell a `Unit` against it seconds later. `mint_unit` checks at mint time; `purchase_and_burn` checks again at redemption time, because a batch can go on hold in the window between the two.
+- **Critical holds need two different signers to release.** One person can place a critical hold alone (pulling the emergency brake shouldn't require consensus), but releasing one requires `propose_release` from one `RegulatorCap` holder and `confirm_release` from a *different* one — mirrors how real recalls aren't unilateral decisions. Advisory/Recall holds stay single-signer, since requiring two people for every minor hold would just create friction without a matching real-world norm.
 - **No access control on `add_checkpoint`.** Deliberate MVP simplification: trust comes from every checkpoint being permanently and publicly attributed to a real wallet address, not from an allow-list. Placing/releasing holds *is* capability-gated (`RegulatorCap`), since that's a much stronger action that freezes the whole chain.
 - **AI check degrades gracefully.** Local rule-based checks (`chainAnalysis.ts`) run first and independently of the Gonka call, so a flaky connection during a demo still shows *something* instead of a blank error.
 
@@ -152,3 +156,5 @@ Manual end-to-end smoke test (needs a funded testnet wallet): register a batch �
 - **No cold-chain data.** The AI only reasons over timing/sequence, not sensor data (e.g. temperature excursions). Adding a `temperature_c` field to `Checkpoint` plus a rule in `chainAnalysis.ts` is a small extension.
 - **No hidden/scratch-off secret on sale QRs.** The 10-minute expiry mitigates cloning but doesn't eliminate it; a commit-reveal scheme (a hidden code under a scratch panel, hashed on-chain) would close that further at the cost of more physical packaging complexity.
 - **Single demo dataset.** There's no real pharmacy registry to cross-reference — the AI reasons over the custody *pattern*, not a live drugs database. Be upfront about that in a pitch.
+- **Stale-hold flagging is UI-only.** The "⏰ Overdue for review" badge is computed client-side against wall-clock time; nothing on-chain enforces a review deadline or auto-escalates a stuck hold. A real version might auto-escalate an unaddressed Critical hold's case reference to a wider regulator list after N hours.
+- **No hidden per-item on-chain state.** The recall warning on a scanned item QR works because the Verify page re-reads the *batch's* current hold status every time — there's no separate on-chain record of "which specific printed QR codes exist," so this cascades correctly by construction rather than needing an explicit notification step, but it also means there's no way to notify someone proactively; they have to re-scan to see the warning.

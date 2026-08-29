@@ -21,6 +21,9 @@ export interface HoldRecord {
   releasedBy: string | null;
   releasedAtMs: number | null;
   releaseNote: string | null;
+  /** Set only when released via the two-signer critical path — the address
+   * that proposed the release, distinct from `releasedBy` (who confirmed it). */
+  coReleasedBy: string | null;
 }
 
 export interface BatchRecord {
@@ -37,6 +40,10 @@ export interface BatchRecord {
   heldBy: string;
   heldAtMs: number;
   holdHistory: HoldRecord[];
+  /** Address that proposed releasing the current critical hold, while a
+   * second regulator's confirmation is still pending. `null` otherwise. */
+  pendingReleaseBy: string | null;
+  pendingReleaseNote: string | null;
 }
 
 export interface UnitRecord {

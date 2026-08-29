@@ -29,6 +29,19 @@
 /// not optional metadata: a regulatory hold with no severity, no case to
 /// point back to, or no stated reason for lifting it isn't a usable audit
 /// record, just a flag that got flipped twice.
+///
+/// A hold also gates sales, not just custody: `mint_unit` and
+/// `purchase_and_burn` both abort while `is_held` is true. Without this, a
+/// batch could be placed under a "Critical — stop sale" hold and someone
+/// could still mint and sell a `Unit` against it seconds later — the hold
+/// would be evidence after the fact, not an actual stoppage.
+///
+/// `SEVERITY_CRITICAL` holds cannot be released by a single signer.
+/// `release_hold` aborts for them; releasing one requires `propose_release`
+/// from one `RegulatorCap` holder followed by `confirm_release` from a
+/// *different* one. This mirrors how real recalls work: one person can
+/// pull the emergency brake alone, but nobody unilaterally decides a
+/// critical stop-sale is over.
 module pharma_track::batch;
 
 use std::option::{Self, Option};
@@ -74,6 +87,11 @@ public struct HoldRecord has copy, drop, store {
     /// when" without "why" is an audit gap: a hold could otherwise be
     /// lifted with no on-chain justification at all.
     release_note: Option<String>,
+    /// Set only when this release went through the two-signer critical
+    /// path (`propose_release` + `confirm_release`): the address that
+    /// *proposed* the release, distinct from `released_by` (the address
+    /// that *confirmed* it). `none` for single-signer releases.
+    co_released_by: Option<address>,
 }
 
 /// On-chain record for one drug batch.
@@ -97,6 +115,11 @@ public struct Batch has key {
     /// first. The currently-active hold (if any) is always the last entry,
     /// with `released_by`/`released_at_ms` still `none`.
     hold_history: vector<HoldRecord>,
+    /// Set by `propose_release` while a critical hold's two-signer release
+    /// is pending confirmation; cleared by `confirm_release`. `none`
+    /// otherwise, including for non-critical holds (which never use this).
+    pending_release_by: Option<address>,
+    pending_release_note: Option<String>,
 }
 
 /// Capability required to place or release a hold on a batch. Minted once
@@ -165,9 +188,21 @@ public struct BatchHeld has copy, drop {
     held_at_ms: u64,
 }
 
+/// Emitted by `propose_release` — the first of the two signatures a
+/// critical hold's release requires.
+public struct ReleaseProposed has copy, drop {
+    batch_id: address,
+    proposed_by: address,
+    note: String,
+    proposed_at_ms: u64,
+}
+
 public struct BatchReleased has copy, drop {
     batch_id: address,
     released_by: address,
+    /// Set only for a critical hold released via `confirm_release` — the
+    /// address that proposed it, distinct from `released_by`.
+    co_released_by: Option<address>,
     release_note: String,
     released_at_ms: u64,
 }
@@ -203,6 +238,11 @@ const EUnitExpired: u64 = 7;
 const EInvalidSeverity: u64 = 8;
 const EEmptyCaseReference: u64 = 9;
 const EEmptyReleaseNote: u64 = 10;
+const EUnitBatchMismatch: u64 = 11;
+const ECriticalRequiresMultisig: u64 = 12;
+const EReleaseAlreadyProposed: u64 = 13;
+const ENoReleaseProposed: u64 = 14;
+const ESameRegulatorCannotConfirm: u64 = 15;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -257,6 +297,8 @@ public entry fun create_batch(
         held_by: @0x0,
         held_at_ms: 0,
         hold_history: vector::empty<HoldRecord>(),
+        pending_release_by: option::none(),
+        pending_release_note: option::none(),
     };
 
     event::emit(BatchCreated {
@@ -313,12 +355,16 @@ public entry fun add_checkpoint(
 /// printed/shown on that one physical package only — anyone who redeems
 /// it via `purchase_and_burn` gets the object deleted out from under any
 /// later scan.
+///
+/// Aborts if the batch is on hold — a recalled or suspect batch shouldn't
+/// be sellable in the first place, not just flagged after the fact.
 public entry fun mint_unit(
     batch: &Batch,
     price: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    assert!(!batch.is_held, EBatchHeld);
     assert!(price > 0, EZeroPrice);
 
     let now = clock.timestamp_ms();
@@ -345,12 +391,21 @@ public entry fun mint_unit(
 /// so its QR code can never be redeemed again. `payment` must carry the
 /// exact price — this MVP doesn't hand back change, so wallets should
 /// split an exact-value coin before calling this.
+///
+/// Takes the `Batch` too and re-checks `is_held` here, not just at mint
+/// time: a batch can go on hold in the window between a `Unit` being
+/// minted and someone paying for it, and the sale needs to stop the
+/// instant that happens, not just block new `Unit`s from then on.
 public entry fun purchase_and_burn(
     unit: Unit,
+    batch: &Batch,
     payment: Coin<SUI>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    assert!(unit.batch_id == object::uid_to_address(&batch.id), EUnitBatchMismatch);
+    assert!(!batch.is_held, EBatchHeld);
+
     let now = clock.timestamp_ms();
     assert!(now - unit.minted_at_ms <= UNIT_EXPIRY_MS, EUnitExpired);
     assert!(coin::value(&payment) == unit.price, EWrongPayment);
@@ -415,6 +470,7 @@ public entry fun place_hold(
         released_by: option::none(),
         released_at_ms: option::none(),
         release_note: option::none(),
+        co_released_by: option::none(),
     });
 
     event::emit(BatchHeld {
@@ -432,6 +488,10 @@ public entry fun place_hold(
 /// the hold, since caps are fungible proof of role, not per-hold tickets.
 /// `release_note` is mandatory: "who released it and when" without "why
 /// it was safe to" is an audit gap, not a complete record.
+///
+/// Aborts for `SEVERITY_CRITICAL` holds — those require two different
+/// signers via `propose_release` + `confirm_release` instead. See the
+/// module doc comment for why.
 public entry fun release_hold(
     _cap: &RegulatorCap,
     batch: &mut Batch,
@@ -440,12 +500,82 @@ public entry fun release_hold(
     ctx: &mut TxContext,
 ) {
     assert!(batch.is_held, EBatchNotHeld);
+    assert!(batch.hold_severity != SEVERITY_CRITICAL, ECriticalRequiresMultisig);
     assert!(release_note.length() > 0, EEmptyReleaseNote);
 
     let sender = ctx.sender();
     let now = clock.timestamp_ms();
     let note = string::utf8(release_note);
 
+    finish_release(batch, sender, note, option::none(), now);
+}
+
+/// First signature of a critical hold's release: records who's proposing
+/// it and why, but does NOT unfreeze anything yet — `confirm_release`
+/// still has to happen, from a different `RegulatorCap` holder.
+public entry fun propose_release(
+    _cap: &RegulatorCap,
+    batch: &mut Batch,
+    note: vector<u8>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(batch.is_held, EBatchNotHeld);
+    assert!(batch.hold_severity == SEVERITY_CRITICAL, ECriticalRequiresMultisig);
+    assert!(batch.pending_release_by.is_none(), EReleaseAlreadyProposed);
+    assert!(note.length() > 0, EEmptyReleaseNote);
+
+    let sender = ctx.sender();
+    let now = clock.timestamp_ms();
+    let note_str = string::utf8(note);
+
+    batch.pending_release_by = option::some(sender);
+    batch.pending_release_note = option::some(note_str);
+
+    event::emit(ReleaseProposed {
+        batch_id: object::uid_to_address(&batch.id),
+        proposed_by: sender,
+        note: note_str,
+        proposed_at_ms: now,
+    });
+}
+
+/// Second signature of a critical hold's release: must come from a
+/// `RegulatorCap` holder other than whoever called `propose_release`.
+/// Actually unfreezes the batch, using the note captured at proposal time
+/// — the confirming signer is vouching for that stated reason, not
+/// writing a new one, since the whole point is two people agreeing on the
+/// same justification.
+public entry fun confirm_release(
+    _cap: &RegulatorCap,
+    batch: &mut Batch,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(batch.pending_release_by.is_some(), ENoReleaseProposed);
+
+    let sender = ctx.sender();
+    let proposer = *batch.pending_release_by.borrow();
+    assert!(sender != proposer, ESameRegulatorCannotConfirm);
+
+    let note = batch.pending_release_note.extract();
+    batch.pending_release_by = option::none();
+
+    let now = clock.timestamp_ms();
+    finish_release(batch, sender, note, option::some(proposer), now);
+}
+
+/// Shared tail end of releasing a hold — resets the batch's "current
+/// hold" fields, closes out the last `hold_history` entry, and emits
+/// `BatchReleased`. Used by both the single-signer and two-signer paths
+/// so they can never drift out of sync with each other.
+fun finish_release(
+    batch: &mut Batch,
+    released_by: address,
+    release_note: String,
+    co_released_by: Option<address>,
+    now: u64,
+) {
     batch.is_held = false;
     batch.hold_reason = string::utf8(b"");
     batch.hold_severity = 0;
@@ -455,14 +585,16 @@ public entry fun release_hold(
 
     let last_index = batch.hold_history.length() - 1;
     let last_record = batch.hold_history.borrow_mut(last_index);
-    last_record.released_by = option::some(sender);
+    last_record.released_by = option::some(released_by);
     last_record.released_at_ms = option::some(now);
-    last_record.release_note = option::some(note);
+    last_record.release_note = option::some(release_note);
+    last_record.co_released_by = co_released_by;
 
     event::emit(BatchReleased {
         batch_id: object::uid_to_address(&batch.id),
-        released_by: sender,
-        release_note: note,
+        released_by,
+        co_released_by,
+        release_note,
         released_at_ms: now,
     });
 }
@@ -535,6 +667,15 @@ public fun hold_record_released_by(r: &HoldRecord): Option<address> { r.released
 public fun hold_record_released_at_ms(r: &HoldRecord): Option<u64> { r.released_at_ms }
 
 public fun hold_record_release_note(r: &HoldRecord): Option<String> { r.release_note }
+
+public fun hold_record_co_released_by(r: &HoldRecord): Option<address> { r.co_released_by }
+
+/// The address that proposed releasing the currently-active critical
+/// hold, while `confirm_release` is still pending. `none` if there's no
+/// hold, the hold isn't critical, or nobody has proposed a release yet.
+public fun pending_release_by(batch: &Batch): Option<address> { batch.pending_release_by }
+
+public fun pending_release_note(batch: &Batch): Option<String> { batch.pending_release_note }
 
 /// The `severity` value meaning "advisory" — informational, no immediate
 /// sale stoppage implied beyond the hold itself.

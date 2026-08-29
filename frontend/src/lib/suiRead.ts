@@ -67,6 +67,7 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
       releasedBy: unwrapOption(r.released_by, (v) => String(v)),
       releasedAtMs: unwrapOption(r.released_at_ms, (v) => asNumber(v)),
       releaseNote: unwrapOption(r.release_note, (v) => String(v)),
+      coReleasedBy: unwrapOption(r.co_released_by, (v) => String(v)),
     };
   });
 
@@ -84,6 +85,8 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
     heldBy: String(fields.held_by ?? ''),
     heldAtMs: asNumber(fields.held_at_ms),
     holdHistory,
+    pendingReleaseBy: unwrapOption(fields.pending_release_by, (v) => String(v)),
+    pendingReleaseNote: unwrapOption(fields.pending_release_note, (v) => String(v)),
   };
 }
 

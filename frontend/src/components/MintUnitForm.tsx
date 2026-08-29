@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
+import { parseBatchObject } from '../lib/suiRead';
 import { QrCodeCard } from './QrCodeCard';
 
 interface CreatedObjectChange {
@@ -21,6 +22,16 @@ export function MintUnitForm() {
   const [error, setError] = useState<string | null>(null);
   const [createdUnitId, setCreatedUnitId] = useState<string | null>(null);
 
+  // Checked purely so the form can warn before a doomed transaction —
+  // `mint_unit` re-checks `is_held` on-chain regardless, so this is UX,
+  // not the actual safety boundary.
+  const { data: batchData } = useSuiClientQuery(
+    'getObject',
+    { id: batchId.trim(), options: { showContent: true } },
+    { enabled: Boolean(batchId.trim()) },
+  );
+  const batch = batchData ? parseBatchObject(batchData) : null;
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -29,6 +40,10 @@ export function MintUnitForm() {
     const priceNum = Number(priceSui);
     if (!batchId.trim()) {
       setError('Batch object ID is required.');
+      return;
+    }
+    if (batch?.isHeld) {
+      setError('This batch is on hold — sale QRs can\'t be minted until the hold is released.');
       return;
     }
     if (!priceSui.trim() || !Number.isFinite(priceNum) || priceNum <= 0) {
@@ -84,6 +99,12 @@ export function MintUnitForm() {
 
       {!account && <p className="error-text">Connect a wallet to mint a sale QR.</p>}
       {error && <p className="error-text">{error}</p>}
+      {batch?.isHeld && (
+        <p className="error-text">
+          🚫 This batch is currently on hold ({batch.holdReason || 'no reason given'}) — minting is
+          blocked on-chain until the hold is released.
+        </p>
+      )}
 
       <form onSubmit={handleSubmit}>
         <div className="field-row">
@@ -112,7 +133,7 @@ export function MintUnitForm() {
           </div>
         </div>
 
-        <button type="submit" className="btn btn-primary" disabled={!account || isPending}>
+        <button type="submit" className="btn btn-primary" disabled={!account || isPending || Boolean(batch?.isHeld)}>
           {isPending ? 'Minting on-chain…' : 'Mint single-use QR'}
         </button>
       </form>

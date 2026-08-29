@@ -1,0 +1,33 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: Rx
+      - generic [ref=e7]:
+        - heading "PharmaTrust" [level=1] [ref=e8]
+        - paragraph [ref=e9]: Batch verification register
+    - navigation "Sections" [ref=e10]:
+      - button "Register batch Manufacturer" [ref=e11] [cursor=pointer]:
+        - generic [ref=e12]: Register batch
+        - generic [ref=e13]: Manufacturer
+      - button "Scan checkpoint Distributor / pharmacy" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: Scan checkpoint
+        - generic [ref=e16]: Distributor / pharmacy
+      - button "Verify a product Anyone" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: Verify a product
+        - generic [ref=e19]: Anyone
+      - button "Create sale QR Pharmacy" [ref=e20] [cursor=pointer]:
+        - generic [ref=e21]: Create sale QR
+        - generic [ref=e22]: Pharmacy
+      - button "Pay & dispense Customer" [active] [ref=e23] [cursor=pointer]:
+        - generic [ref=e24]: Pay & dispense
+        - generic [ref=e25]: Customer
+    - button "Connect Wallet" [ref=e26]
+  - generic [ref=e63]:
+    - heading "Pay & dispense" [level=2] [ref=e64]
+    - paragraph [ref=e65]: Scan the single-use QR on the package, then pay directly from your wallet. Payment and redemption happen in the same transaction — the moment it confirms, this exact QR stops working for anyone, including you if you scan it again.
+    - paragraph [ref=e66]: Connect a wallet to pay.
+    - button "Scan QR with camera" [ref=e68] [cursor=pointer]
+    - generic [ref=e69]:
+      - generic [ref=e70]: Unit object ID
+      - textbox "Unit object ID" [ref=e71]:
+        - /placeholder: 0x… (scan the sale QR, or paste manually)

@@ -110,6 +110,21 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
         </p>
       )}
 
+      {batch && serial && batch.isHeld && (
+        <div className="hold-banner hold-banner-active" style={{ marginTop: 20 }}>
+          <strong style={{ fontSize: 16 }}>
+            🚫 DO NOT USE THIS MEDICINE — package #{serial} belongs to a batch currently on hold
+          </strong>
+          <p style={{ marginBottom: 0 }}>
+            Reason: "{batch.holdReason}". This applies to every package from batch{' '}
+            <span className="code-chip">{batch.batchCode}</span>, including this specific one, even
+            though it was printed and may already be with you — a hold placed after packaging still
+            covers packages already out in the world. Do not take or dispense it; contact the
+            pharmacy or manufacturer.
+          </p>
+        </div>
+      )}
+
       {batch && (
         <div style={{ marginTop: 20 }}>
           <h3 style={{ fontFamily: 'var(--font-display)', marginBottom: 2 }}>{batch.productName}</h3>

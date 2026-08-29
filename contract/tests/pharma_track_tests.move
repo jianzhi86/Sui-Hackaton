@@ -479,11 +479,13 @@ fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
     scenario.next_tx(CUSTOMER);
     {
         let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
     };
 
     // Payment landed with the manufacturer, and the Unit is gone for good —
@@ -522,11 +524,13 @@ fun test_purchase_and_burn_rejects_wrong_payment() {
     scenario.next_tx(CUSTOMER);
     {
         let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(1, ctx);
-        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
     };
 
     scenario.end();
@@ -559,11 +563,13 @@ fun test_purchase_and_burn_cannot_be_redeemed_twice() {
     scenario.next_tx(CUSTOMER);
     {
         let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
     };
 
     // A counterfeiter who cloned the QR tries to redeem it again.
@@ -601,12 +607,400 @@ fun test_purchase_and_burn_rejects_expired_unit() {
     scenario.next_tx(CUSTOMER);
     {
         let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let mut clock = clock::create_for_testing(ctx);
         clock.set_for_testing(batch::unit_expiry_ms() + 1);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 2 == batch::EBatchHeld. A held batch cannot have new sale QRs
+// minted against it — the hold is a stoppage, not just a warning label.
+#[test, expected_failure(abort_code = 2)]
+fun test_mint_unit_rejects_held_batch() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-014");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Suspected counterfeit",
+            batch::severity_critical(),
+            b"CASE-2026-009",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 2 == batch::EBatchHeld. A `Unit` minted *before* a hold went
+// active still can't be redeemed once the batch is held — the check at
+// purchase time matters just as much as the one at mint time.
+#[test, expected_failure(abort_code = 2)]
+fun test_purchase_and_burn_rejects_batch_held_after_mint() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-015");
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    // A hold lands in the window between minting and payment.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Recalled after sale QR was already minted",
+            batch::severity_critical(),
+            b"CASE-2026-010",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 11 == batch::EUnitBatchMismatch.
+//
+// Creates batch A, mints a Unit against it (which touches/returns A,
+// making it the "most recently shared" Batch), THEN creates batch B in a
+// later transaction (making B the new "most recent" one) — so `take_shared`
+// unambiguously resolves to each batch when we need it, without relying on
+// `take_shared_by_id` or reading IDs out of same-transaction state that
+// `test_scenario` hasn't committed yet.
+#[test, expected_failure(abort_code = 11)]
+fun test_purchase_and_burn_rejects_wrong_batch() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(b"BATCH-2026-016A", b"Amoxicillin 500mg", &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let batch_a = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&batch_a, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(batch_a);
+    };
+
+    // Batch B is created — and therefore shared — after A was last
+    // touched, so it's now unambiguously the "most recent" Batch.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(b"BATCH-2026-016B", b"Paracetamol 500mg", &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    // Try to redeem the Unit (minted against A) against B instead.
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let batch_b = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, &batch_b, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(batch_b);
+    };
+
+    scenario.end();
+}
+
+// abort_code 12 == batch::ECriticalRequiresMultisig. A single signer can't
+// release a critical hold via the plain `release_hold` entry point.
+#[test, expected_failure(abort_code = 12)]
+fun test_release_hold_rejects_single_signer_for_critical() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-017");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Confirmed counterfeit",
+            batch::severity_critical(),
+            b"CASE-2026-011",
+            &clock,
+            ctx,
+        );
+        batch::release_hold(&cap, &mut shared_batch, b"Trying to release alone", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_propose_then_confirm_release_by_different_regulators_succeeds() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-018");
+
+    // Onboard PHARMACY as a second regulator.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        batch::mint_regulator_cap(&cap, PHARMACY, ctx);
+        scenario.return_to_sender(cap);
+    };
+
+    // MANUFACTURER places a critical hold.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Confirmed counterfeit",
+            batch::severity_critical(),
+            b"CASE-2026-012",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    // MANUFACTURER proposes releasing it.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::propose_release(&cap, &mut shared_batch, b"Independent lab confirmed genuine", &clock, ctx);
+
+        assert!(batch::pending_release_by(&shared_batch) == option::some(MANUFACTURER), 0);
+        assert!(batch::is_held(&shared_batch), 1); // still held — one signature isn't enough
+
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    // PHARMACY — a different regulator — confirms it.
+    scenario.next_tx(PHARMACY);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::confirm_release(&cap, &mut shared_batch, &clock, ctx);
+
+        assert!(!batch::is_held(&shared_batch), 2);
+        assert!(batch::pending_release_by(&shared_batch) == option::none(), 3);
+
+        let history = batch::hold_history(&shared_batch);
+        let record = history.borrow(0);
+        assert!(batch::hold_record_released_by(record) == option::some(PHARMACY), 4);
+        assert!(batch::hold_record_co_released_by(record) == option::some(MANUFACTURER), 5);
+        assert!(
+            batch::hold_record_release_note(record)
+                == option::some(string::utf8(b"Independent lab confirmed genuine")),
+            6,
+        );
+
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 15 == batch::ESameRegulatorCannotConfirm. Holding two
+// different RegulatorCap *objects* doesn't help — the check is on the
+// sender's address, since caps are fungible proof of role, not identity.
+#[test, expected_failure(abort_code = 15)]
+fun test_confirm_release_rejects_same_regulator() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-019");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Confirmed counterfeit",
+            batch::severity_critical(),
+            b"CASE-2026-013",
+            &clock,
+            ctx,
+        );
+        batch::propose_release(&cap, &mut shared_batch, b"Trying to self-confirm", &clock, ctx);
+        batch::confirm_release(&cap, &mut shared_batch, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 14 == batch::ENoReleaseProposed.
+#[test, expected_failure(abort_code = 14)]
+fun test_confirm_release_rejects_without_proposal() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-020");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Confirmed counterfeit",
+            batch::severity_critical(),
+            b"CASE-2026-014",
+            &clock,
+            ctx,
+        );
+        batch::confirm_release(&cap, &mut shared_batch, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 12 == batch::ECriticalRequiresMultisig. Non-critical holds
+// don't use the propose/confirm flow at all — release_hold handles them.
+#[test, expected_failure(abort_code = 12)]
+fun test_propose_release_rejects_non_critical_hold() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-021");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Just a recall, not critical",
+            batch::severity_recall(),
+            b"CASE-2026-015",
+            &clock,
+            ctx,
+        );
+        batch::propose_release(&cap, &mut shared_batch, b"Trying multisig on a non-critical hold", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+// abort_code 13 == batch::EReleaseAlreadyProposed.
+#[test, expected_failure(abort_code = 13)]
+fun test_propose_release_rejects_duplicate_proposal() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_cap(&mut scenario, b"BATCH-2026-022");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let cap = scenario.take_from_sender<RegulatorCap>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &cap,
+            &mut shared_batch,
+            b"Confirmed counterfeit",
+            batch::severity_critical(),
+            b"CASE-2026-016",
+            &clock,
+            ctx,
+        );
+        batch::propose_release(&cap, &mut shared_batch, b"First proposal", &clock, ctx);
+        batch::propose_release(&cap, &mut shared_batch, b"Second proposal", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        scenario.return_to_sender(cap);
     };
 
     scenario.end();

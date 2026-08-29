@@ -4,7 +4,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, UNIT_EXPIRY_MS, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
-import { parseUnitObject } from '../lib/suiRead';
+import { parseBatchObject, parseUnitObject } from '../lib/suiRead';
 import { extractUnitId } from '../lib/qr';
 import { QrScanButton } from './QrScanButton';
 
@@ -42,6 +42,18 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
   const unit = data ? parseUnitObject(data) : null;
   const alreadyRedeemed = Boolean(unitId) && isFetched && !isLoading && !unit;
 
+  // Re-check the batch's hold status independently of the Unit — a batch
+  // can go on hold in the window between a Unit being minted and someone
+  // paying for it, and `purchase_and_burn` re-checks this on-chain too, so
+  // the UI needs to reflect the same possibility instead of just trusting
+  // that a mintable-at-the-time Unit is still safe to redeem.
+  const { data: batchData } = useSuiClientQuery(
+    'getObject',
+    { id: unit?.batchId ?? '', options: { showContent: true } },
+    { enabled: Boolean(unit?.batchId) },
+  );
+  const batch = batchData ? parseBatchObject(batchData) : null;
+
   function handlePay() {
     if (!unit) return;
     setError(null);
@@ -51,7 +63,7 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
     const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(unit.price)]);
     tx.moveCall({
       target: target('purchase_and_burn'),
-      arguments: [tx.object(unit.objectId), payment, tx.object(CLOCK_OBJECT_ID)],
+      arguments: [tx.object(unit.objectId), tx.object(unit.batchId), payment, tx.object(CLOCK_OBJECT_ID)],
     });
 
     signAndExecute(
@@ -114,7 +126,15 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
         </p>
       )}
 
-      {unit && !expired && (
+      {unit && batch?.isHeld && (
+        <p className="error-text" style={{ marginTop: 16 }}>
+          🚫 SALE BLOCKED — this batch is currently on hold ({batch.holdReason || 'no reason given'}
+          ). Payment is disabled on-chain while a batch is held; do not accept this medicine even
+          if offered outside this app.
+        </p>
+      )}
+
+      {unit && !expired && !batch?.isHeld && (
         <div style={{ marginTop: 16 }}>
           <p className="helper-text">
             Price <span className="code-chip">{priceSui} SUI</span> · batch{' '}
