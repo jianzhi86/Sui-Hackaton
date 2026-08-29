@@ -36,6 +36,14 @@ export const MODULE_NAME = 'batch';
 /** Sui's shared Clock object always lives at this fixed address. */
 export const CLOCK_OBJECT_ID = '0x6';
 
+/**
+ * How long a `Unit` stays redeemable after minting, in milliseconds. Must
+ * match `UNIT_EXPIRY_MS` in `pharma_track.move` — kept here too so the UI
+ * can show a countdown and disable payment locally instead of waiting for
+ * `purchase_and_burn` to abort on-chain.
+ */
+export const UNIT_EXPIRY_MS = 600_000;
+
 export const DEFAULT_NETWORK: 'devnet' | 'testnet' | 'mainnet' =
   import.meta.env.VITE_SUI_NETWORK || 'testnet';
 

@@ -1,15 +1,18 @@
 #[test_only]
 module pharma_track::batch_tests;
 
-use pharma_track::batch::{Self, Batch, RegulatorCap};
+use pharma_track::batch::{Self, Batch, RegulatorCap, Unit};
 use std::option;
 use std::string;
 use sui::clock;
+use sui::coin;
+use sui::sui::SUI;
 use sui::test_scenario;
 
 const MANUFACTURER: address = @0xA11CE;
 const DISTRIBUTOR: address = @0xB0B;
 const PHARMACY: address = @0xCAFE;
+const CUSTOMER: address = @0xD00D;
 
 #[test]
 fun test_create_batch_and_add_checkpoint() {
@@ -295,6 +298,164 @@ fun test_hold_history_records_every_cycle() {
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         scenario.return_to_sender(cap);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(b"BATCH-2026-007", b"Amoxicillin 500mg", &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    // Pharmacy mints a single-use sale QR against the batch.
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    // Customer scans it and pays the exact price.
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    // Payment landed with the manufacturer, and the Unit is gone for good —
+    // there is nothing left to `take_shared` for a second redemption.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let paid = scenario.take_from_sender<coin::Coin<SUI>>();
+        assert!(paid.value() == 100, 0);
+        scenario.return_to_sender(paid);
+    };
+
+    scenario.end();
+}
+
+// abort_code 6 == batch::EWrongPayment.
+#[test, expected_failure(abort_code = 6)]
+fun test_purchase_and_burn_rejects_wrong_payment() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(b"BATCH-2026-008", b"Amoxicillin 500mg", &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(1, ctx);
+        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    scenario.end();
+}
+
+// A second scan of the same QR has no `Unit` left to redeem: the object was
+// deleted by the first, successful `purchase_and_burn`, so `take_shared`
+// itself aborts — there is no application-level "already sold" flag to
+// bypass, the object is simply gone.
+#[test, expected_failure]
+fun test_purchase_and_burn_cannot_be_redeemed_twice() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(b"BATCH-2026-009", b"Amoxicillin 500mg", &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    // A counterfeiter who cloned the QR tries to redeem it again.
+    scenario.next_tx(CUSTOMER);
+    {
+        let _unit = scenario.take_shared<Unit>();
+        abort 0
+    };
+
+    scenario.end();
+}
+
+// abort_code 7 == batch::EUnitExpired.
+#[test, expected_failure(abort_code = 7)]
+fun test_purchase_and_burn_rejects_expired_unit() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(b"BATCH-2026-010", b"Amoxicillin 500mg", &clock, ctx);
+        clock.destroy_for_testing();
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    // Customer doesn't scan it until well past the redemption window.
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(batch::unit_expiry_ms() + 1);
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, payment, &clock, ctx);
+        clock.destroy_for_testing();
     };
 
     scenario.end();

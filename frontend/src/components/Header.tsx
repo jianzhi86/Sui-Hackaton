@@ -10,6 +10,8 @@ const TABS: { key: Tab; label: string; hint: string }[] = [
   { key: 'register', label: 'Register batch', hint: 'Manufacturer' },
   { key: 'scan', label: 'Scan checkpoint', hint: 'Distributor / pharmacy' },
   { key: 'verify', label: 'Verify a product', hint: 'Anyone' },
+  { key: 'mint', label: 'Create sale QR', hint: 'Pharmacy' },
+  { key: 'pay', label: 'Pay & dispense', hint: 'Customer' },
 ];
 
 export function Header({ active, onNavigate }: HeaderProps) {

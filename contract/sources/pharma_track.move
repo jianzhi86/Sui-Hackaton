@@ -27,7 +27,9 @@ module pharma_track::batch;
 use std::option::{Self, Option};
 use std::string::{Self, String};
 use sui::clock::{Self, Clock};
+use sui::coin::{Self, Coin};
 use sui::event;
+use sui::sui::SUI;
 
 /// A single custody event in a batch's lifecycle.
 public struct Checkpoint has copy, drop, store {
@@ -82,6 +84,25 @@ public struct RegulatorCap has key, store {
     id: UID,
 }
 
+/// One physical, sellable dose/pack of a batch, represented as its own
+/// shared object so it can be individually addressed by a single QR code.
+/// A pharmacy mints one `Unit` per physical package it puts on the shelf;
+/// the QR printed on that package encodes this object's ID.
+///
+/// Redeeming a `Unit` (`purchase_and_burn`) consumes it by value and
+/// permanently deletes it from chain state. That deletion is what makes
+/// the QR "single-use": the object it points to no longer exists, so a
+/// second scan has nothing left to call — Sui itself refuses to build a
+/// transaction that references a deleted object ID, there is no
+/// application-level flag to check or race.
+public struct Unit has key {
+    id: UID,
+    batch_id: address,
+    price: u64,
+    manufacturer: address,
+    minted_at_ms: u64,
+}
+
 fun init(ctx: &mut TxContext) {
     transfer::transfer(RegulatorCap { id: object::new(ctx) }, ctx.sender());
 }
@@ -126,6 +147,24 @@ public struct BatchReleased has copy, drop {
     released_at_ms: u64,
 }
 
+public struct UnitMinted has copy, drop {
+    unit_id: address,
+    batch_id: address,
+    price: u64,
+    minted_at_ms: u64,
+}
+
+/// Emitted right before the `Unit` object is deleted — this is the
+/// durable record that the sale happened, since the object itself won't
+/// exist to query afterwards.
+public struct UnitSold has copy, drop {
+    unit_id: address,
+    batch_id: address,
+    buyer: address,
+    price: u64,
+    sold_at_ms: u64,
+}
+
 // ===== Errors =====
 
 const EEmptyBatchCode: u64 = 0;
@@ -133,6 +172,23 @@ const EEmptyProductName: u64 = 1;
 const EBatchHeld: u64 = 2;
 const EBatchNotHeld: u64 = 3;
 const EEmptyHoldReason: u64 = 4;
+const EZeroPrice: u64 = 5;
+const EWrongPayment: u64 = 6;
+const EUnitExpired: u64 = 7;
+
+/// How long a `Unit` stays redeemable after minting, in milliseconds
+/// (10 minutes). Short on purpose: a `Unit` is meant to be minted at the
+/// register and paid for on the spot, not pre-printed on packaging and
+/// left sitting on a shelf for weeks — a long-lived, unpaid QR sitting in
+/// public is exactly what's easy to photograph and clone onto counterfeit
+/// packaging. Bounding its lifetime bounds that cloning window; it doesn't
+/// eliminate it, since anyone can still relay a photo within 10 minutes,
+/// but "clone it and race to a till within 10 minutes" is a much smaller
+/// attack than "clone it any time before the real one sells." Expiry
+/// doesn't refund or reopen a `Unit` — an expired one is simply stuck
+/// forever (it can't be re-minted or extended), so the seller mints a
+/// fresh one for a new attempt.
+const UNIT_EXPIRY_MS: u64 = 600_000;
 
 // ===== Entry functions =====
 
@@ -210,6 +266,70 @@ public entry fun add_checkpoint(
         timestamp_ms: now,
         checkpoint_index: batch.checkpoints.length() - 1,
     });
+}
+
+/// Mint one sellable, single-use `Unit` against a batch. Called by
+/// whoever is dispensing the physical package (typically the pharmacy) at
+/// the price they're selling it for, in MIST. The returned QR should be
+/// printed/shown on that one physical package only — anyone who redeems
+/// it via `purchase_and_burn` gets the object deleted out from under any
+/// later scan.
+public entry fun mint_unit(
+    batch: &Batch,
+    price: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(price > 0, EZeroPrice);
+
+    let now = clock.timestamp_ms();
+    let unit = Unit {
+        id: object::new(ctx),
+        batch_id: object::uid_to_address(&batch.id),
+        price,
+        manufacturer: batch.manufacturer,
+        minted_at_ms: now,
+    };
+
+    event::emit(UnitMinted {
+        unit_id: object::uid_to_address(&unit.id),
+        batch_id: unit.batch_id,
+        price,
+        minted_at_ms: now,
+    });
+
+    transfer::share_object(unit);
+}
+
+/// Pay for and burn a `Unit` in one transaction: the buyer's payment goes
+/// straight to the batch's manufacturer, and the `Unit` object is deleted
+/// so its QR code can never be redeemed again. `payment` must carry the
+/// exact price — this MVP doesn't hand back change, so wallets should
+/// split an exact-value coin before calling this.
+public entry fun purchase_and_burn(
+    unit: Unit,
+    payment: Coin<SUI>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let now = clock.timestamp_ms();
+    assert!(now - unit.minted_at_ms <= UNIT_EXPIRY_MS, EUnitExpired);
+    assert!(coin::value(&payment) == unit.price, EWrongPayment);
+
+    let buyer = ctx.sender();
+
+    event::emit(UnitSold {
+        unit_id: object::uid_to_address(&unit.id),
+        batch_id: unit.batch_id,
+        buyer,
+        price: unit.price,
+        sold_at_ms: now,
+    });
+
+    transfer::public_transfer(payment, unit.manufacturer);
+
+    let Unit { id, batch_id: _, price: _, manufacturer: _, minted_at_ms: _ } = unit;
+    object::delete(id);
 }
 
 /// Place a hold on a batch — freezes the custody chain (no further
@@ -339,3 +459,15 @@ public fun hold_record_is_released(r: &HoldRecord): bool { r.released_by.is_some
 public fun hold_record_released_by(r: &HoldRecord): Option<address> { r.released_by }
 
 public fun hold_record_released_at_ms(r: &HoldRecord): Option<u64> { r.released_at_ms }
+
+public fun unit_batch_id(unit: &Unit): address { unit.batch_id }
+
+public fun unit_price(unit: &Unit): u64 { unit.price }
+
+public fun unit_manufacturer(unit: &Unit): address { unit.manufacturer }
+
+public fun unit_minted_at_ms(unit: &Unit): u64 { unit.minted_at_ms }
+
+/// How long (ms) a `Unit` stays redeemable after minting — exposed so
+/// callers (tests, the frontend) don't have to hardcode `UNIT_EXPIRY_MS`.
+public fun unit_expiry_ms(): u64 { UNIT_EXPIRY_MS }

@@ -15,3 +15,18 @@ export function extractBatchId(decoded: string): string {
   }
   return decoded.trim();
 }
+
+/**
+ * A `Unit`'s single-use QR encodes `?unit=<objectId>` the same way a
+ * batch's QR encodes `?batch=<objectId>`; see `extractBatchId`.
+ */
+export function extractUnitId(decoded: string): string {
+  try {
+    const url = new URL(decoded);
+    const fromParam = url.searchParams.get('unit');
+    if (fromParam) return fromParam;
+  } catch {
+    // Not a URL — fall through and treat the raw text as the ID.
+  }
+  return decoded.trim();
+}

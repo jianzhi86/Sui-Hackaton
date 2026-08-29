@@ -28,6 +28,14 @@ export interface BatchRecord {
   holdHistory: HoldRecord[];
 }
 
+export interface UnitRecord {
+  objectId: string;
+  batchId: string;
+  price: number;
+  manufacturer: string;
+  mintedAtMs: number;
+}
+
 export interface ModelVerdict {
   model: string;
   requestId: string;

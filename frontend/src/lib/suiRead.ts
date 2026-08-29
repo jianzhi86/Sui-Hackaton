@@ -1,4 +1,4 @@
-import type { BatchRecord, Checkpoint, HoldRecord } from './types';
+import type { BatchRecord, Checkpoint, HoldRecord, UnitRecord } from './types';
 
 /**
  * Sui's JSON-RPC has two quirks this file exists to normalize:
@@ -79,5 +79,27 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
     heldBy: String(fields.held_by ?? ''),
     heldAtMs: asNumber(fields.held_at_ms),
     holdHistory,
+  };
+}
+
+/**
+ * @param objectData the value returned by `suiClient.getObject({ id, options: { showContent: true } })`
+ * Returns `null` both when the ID is malformed and when the `Unit` has
+ * already been burned by `purchase_and_burn` — from the frontend's point of
+ * view those look identical (object not found), which is exactly what
+ * makes the QR single-use.
+ */
+export function parseUnitObject(objectData: any): UnitRecord | null {
+  const content = objectData?.data?.content;
+  if (!content || content.dataType !== 'moveObject') return null;
+
+  const fields = content.fields as Record<string, unknown>;
+
+  return {
+    objectId: objectData.data.objectId,
+    batchId: String(fields.batch_id ?? ''),
+    price: asNumber(fields.price),
+    manufacturer: String(fields.manufacturer ?? ''),
+    mintedAtMs: asNumber(fields.minted_at_ms),
   };
 }
