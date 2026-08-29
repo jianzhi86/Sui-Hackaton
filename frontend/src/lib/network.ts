@@ -54,8 +54,33 @@ export const CLOCK_OBJECT_ID = '0x6';
  */
 export const UNIT_EXPIRY_MS = 600_000;
 
-export const DEFAULT_NETWORK: 'devnet' | 'testnet' | 'mainnet' =
-  import.meta.env.VITE_SUI_NETWORK || 'testnet';
+type NetworkName = 'devnet' | 'testnet' | 'mainnet';
+const VALID_NETWORKS: readonly NetworkName[] = ['devnet', 'testnet', 'mainnet'];
+
+/**
+ * `VITE_SUI_NETWORK`'s type annotation in vite-env.d.ts only constrains it
+ * at compile time — a typo'd or stray value in an actual deployment's env
+ * vars (e.g. Vercel project settings) passes straight through as a plain
+ * string at runtime. Without this guard, a bad value here makes
+ * `SuiClientProvider` do `networks[defaultNetwork].network` against a key
+ * that doesn't exist, throwing "Cannot read properties of undefined
+ * (reading 'network')" and white-screening the entire app before anything
+ * renders — confirmed live on the deployed build (2026-08-29). Falling
+ * back to 'testnet' here means a misconfigured env var degrades to "wrong
+ * network" instead of "site doesn't load at all".
+ */
+function resolveDefaultNetwork(): NetworkName {
+  const raw = import.meta.env.VITE_SUI_NETWORK;
+  if (VALID_NETWORKS.includes(raw as NetworkName)) return raw as NetworkName;
+  if (raw) {
+    console.warn(
+      `VITE_SUI_NETWORK is set to "${raw}", which isn't one of ${VALID_NETWORKS.join('/')}. Falling back to "testnet".`,
+    );
+  }
+  return 'testnet';
+}
+
+export const DEFAULT_NETWORK: NetworkName = resolveDefaultNetwork();
 
 export const { networkConfig } = createNetworkConfig({
   devnet: { url: RPC_URLS.devnet, network: 'devnet' },
