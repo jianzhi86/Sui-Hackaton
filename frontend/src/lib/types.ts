@@ -67,6 +67,10 @@ export interface BatchRecord {
    * `escalate_stale_hold`, as overdue for review. `false` when there's no
    * active hold, or an active one just hasn't been flagged (yet). */
   holdEscalated: boolean;
+  /** Remaining staked collateral (MIST) posted at registration — 0 once
+   * withdrawn by the manufacturer or slashed by a Critical + Counterfeit
+   * hold. See `withdraw_stake`/`place_hold` in the Move module. */
+  stakeAmount: number;
 }
 
 export interface UnitRecord {

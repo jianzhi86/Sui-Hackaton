@@ -106,6 +106,7 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
     pendingReleaseBy: unwrapOption(fields.pending_release_by, (v) => String(v)),
     pendingReleaseNote: unwrapOption(fields.pending_release_note, (v) => String(v)),
     holdEscalated: Boolean(fields.hold_escalated),
+    stakeAmount: asNumber(unwrapFields(fields.stake)?.value),
   };
 }
 

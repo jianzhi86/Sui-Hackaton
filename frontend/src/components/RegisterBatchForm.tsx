@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
+import { MIST_PER_SUI } from '@mysten/sui/utils';
 import {
   ADMIN_REGISTRY_OBJECT_ID,
   CLOCK_OBJECT_ID,
@@ -46,6 +47,7 @@ export function RegisterBatchForm() {
   const [batchCode, setBatchCode] = useState('');
   const [productName, setProductName] = useState('');
   const [expiryDate, setExpiryDate] = useState(defaultExpiryDateInput());
+  const [stakeSui, setStakeSui] = useState('0');
   const [error, setError] = useState<string | null>(null);
   const [createdBatchId, setCreatedBatchId] = useState<string | null>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
@@ -67,7 +69,15 @@ export function RegisterBatchForm() {
       return;
     }
 
+    const stakeSuiNum = Number(stakeSui);
+    if (!stakeSui.trim() || !Number.isFinite(stakeSuiNum) || stakeSuiNum < 0) {
+      setError('Stake amount must be zero or a positive number of SUI.');
+      return;
+    }
+    const stakeMist = BigInt(Math.round(stakeSuiNum * Number(MIST_PER_SUI)));
+
     const tx = new Transaction();
+    const [stakeCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(stakeMist)]);
     tx.moveCall({
       target: target('create_batch'),
       arguments: [
@@ -75,6 +85,7 @@ export function RegisterBatchForm() {
         tx.pure.string(batchCode.trim()),
         tx.pure.string(productName.trim()),
         tx.pure.u64(expiryMs),
+        stakeCoin,
         tx.object(CLOCK_OBJECT_ID),
       ],
     });
@@ -90,6 +101,7 @@ export function RegisterBatchForm() {
           if (created?.objectId) {
             setCreatedBatchId(created.objectId);
             setLastDigest(result.digest);
+            setStakeSui('0');
             toast.success('Batch registered.');
           } else {
             setError(
@@ -150,16 +162,36 @@ export function RegisterBatchForm() {
           </div>
         </div>
 
-        <div className="field">
-          <label htmlFor="expiryDate">Expiry date</label>
-          <input
-            id="expiryDate"
-            type="date"
-            value={expiryDate}
-            onChange={(e) => setExpiryDate(e.target.value)}
-            disabled={!canAct || isPending}
-          />
+        <div className="field-row">
+          <div className="field">
+            <label htmlFor="expiryDate">Expiry date</label>
+            <input
+              id="expiryDate"
+              type="date"
+              value={expiryDate}
+              onChange={(e) => setExpiryDate(e.target.value)}
+              disabled={!canAct || isPending}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="stakeSui">Stake (SUI, optional)</label>
+            <input
+              id="stakeSui"
+              type="number"
+              min="0"
+              step="0.01"
+              value={stakeSui}
+              onChange={(e) => setStakeSui(e.target.value)}
+              placeholder="0"
+              disabled={!canAct || isPending}
+            />
+          </div>
         </div>
+        <p className="helper-text" style={{ marginTop: -8, marginBottom: 16 }}>
+          Locked for this batch's whole shelf life. If a regulator later places a Critical +
+          Counterfeit hold on it, the stake is paid out to them as a bounty; otherwise you can
+          withdraw it back once the batch expires. Leave at 0 to register without staking anything.
+        </p>
 
         <button type="submit" className="btn btn-primary" disabled={!canAct || isPending}>
           {isPending ? 'Registering on-chain…' : 'Register batch'}

@@ -7,6 +7,9 @@ import { QrScanButton } from './QrScanButton';
 import { extractBatchId, extractSerial } from '../lib/qr';
 import { AnomalyPanel } from './AnomalyPanel';
 import { HoldControl } from './HoldControl';
+import { StakePanel } from './StakePanel';
+import { SuspicionPanel } from './SuspicionPanel';
+import { CrossBatchPanel } from './CrossBatchPanel';
 import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
@@ -197,6 +200,8 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
           ) : null}
 
           <HoldControl batch={batch} onChanged={() => refetch()} />
+          <StakePanel batch={batch} onChanged={() => refetch()} />
+          <SuspicionPanel batchId={batch.objectId} />
 
           <div className="ledger">
             <div className="ledger-entry">
@@ -257,6 +262,8 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
           )}
 
           {report && <AnomalyPanel report={report} />}
+
+          <CrossBatchPanel batch={batch} />
 
           <ItemQrSheet batchId={batch.objectId} batchCode={batch.batchCode} />
         </div>

@@ -99,3 +99,70 @@ export function analyzeChain(batch: BatchRecord): string[] {
 
   return findings;
 }
+
+/**
+ * Cross-batch checks: patterns only visible when looking at *multiple*
+ * batches from the same manufacturer together, which a per-batch check
+ * (including `analyzeChain` above) can never see by construction. Run
+ * before, and independently of, the cross-batch AI prompt for the same
+ * "never go blank on bad wifi" reason as the single-batch rules.
+ */
+export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
+  const findings: string[] = [];
+  if (batches.length < 2) {
+    findings.push('Only one batch found for this manufacturer — nothing to compare across yet.');
+    return findings;
+  }
+
+  // 1. The same actor address recording checkpoints across many distinct
+  //    batches in a short window — could be a legitimate high-volume
+  //    distributor, or could be one compromised/complicit address rubber-
+  //    stamping custody for a run of counterfeit batches.
+  const actorTimestamps = new Map<string, { batchCode: string; ts: number }[]>();
+  for (const b of batches) {
+    for (const cp of b.checkpoints) {
+      actorTimestamps.set(cp.actor, [
+        ...(actorTimestamps.get(cp.actor) ?? []),
+        { batchCode: b.batchCode, ts: cp.timestampMs },
+      ]);
+    }
+  }
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  for (const [actor, entries] of actorTimestamps) {
+    const distinctBatches = new Set(entries.map((e) => e.batchCode));
+    if (distinctBatches.size < 3) continue;
+    const sorted = [...entries].sort((a, b) => a.ts - b.ts);
+    const span = sorted[sorted.length - 1].ts - sorted[0].ts;
+    if (span <= ONE_DAY_MS) {
+      findings.push(
+        `Address ${actor} recorded checkpoints on ${distinctBatches.size} different batches (${[...distinctBatches].join(', ')}) within a single day — unusually concentrated for one actor.`,
+      );
+    }
+  }
+
+  // 2. A manufacturer with more than one batch that has ever had a
+  //    Critical + Counterfeit hold — a single incident can be bad luck; a
+  //    pattern across batches is a much stronger signal.
+  const counterfeitBatches = batches.filter((b) =>
+    b.holdHistory.some((h) => h.severity === 3 && h.category === 1),
+  );
+  if (counterfeitBatches.length >= 2) {
+    findings.push(
+      `${counterfeitBatches.length} batches from this manufacturer have each had a Critical + Counterfeit hold at some point (${counterfeitBatches.map((b) => b.batchCode).join(', ')}) — a repeat pattern, not an isolated incident.`,
+    );
+  }
+
+  // 3. Multiple batches currently held at the same time.
+  const currentlyHeld = batches.filter((b) => b.isHeld);
+  if (currentlyHeld.length >= 2) {
+    findings.push(
+      `${currentlyHeld.length} batches from this manufacturer are on hold right now simultaneously (${currentlyHeld.map((b) => b.batchCode).join(', ')}).`,
+    );
+  }
+
+  if (findings.length === 0) {
+    findings.push(`No cross-batch pattern found across ${batches.length} batches from this manufacturer.`);
+  }
+
+  return findings;
+}

@@ -40,7 +40,7 @@ fun setup_batch(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>, 
         let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(&registry, batch_code, b"Amoxicillin 500mg", expiry_ms, &clock, ctx);
+        batch::create_batch(&registry, batch_code, b"Amoxicillin 500mg", expiry_ms, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -110,7 +110,7 @@ fun test_create_batch_rejects_empty_code() {
         let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(&registry, b"", b"Amoxicillin 500mg", FAR_FUTURE_MS, &clock, ctx);
+        batch::create_batch(&registry, b"", b"Amoxicillin 500mg", FAR_FUTURE_MS, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -132,7 +132,7 @@ fun test_create_batch_rejects_non_manufacturer() {
         let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(&registry, b"BATCH-2026-023", b"Amoxicillin 500mg", FAR_FUTURE_MS, &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-023", b"Amoxicillin 500mg", FAR_FUTURE_MS, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -153,7 +153,7 @@ fun test_create_batch_rejects_expiry_in_the_past() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         // clock starts at 0 in tests; expiry 0 is not > now (0).
-        batch::create_batch(&registry, b"BATCH-2026-024", b"Amoxicillin 500mg", 0, &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-024", b"Amoxicillin 500mg", 0, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -184,7 +184,7 @@ fun test_admin_add_manufacturer_lets_new_holder_create_batch() {
         let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(&registry, b"BATCH-2026-025", b"Paracetamol 500mg", FAR_FUTURE_MS, &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-025", b"Paracetamol 500mg", FAR_FUTURE_MS, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -1016,7 +1016,7 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
         let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(&registry, b"BATCH-2026-016A", b"Amoxicillin 500mg", FAR_FUTURE_MS, &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-016A", b"Amoxicillin 500mg", FAR_FUTURE_MS, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -1038,7 +1038,7 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
         let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(&registry, b"BATCH-2026-016B", b"Paracetamol 500mg", FAR_FUTURE_MS, &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-016B", b"Paracetamol 500mg", FAR_FUTURE_MS, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
     };
@@ -1654,6 +1654,243 @@ fun test_new_hold_resets_escalation_flag() {
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_report_suspicion_does_not_change_batch_state() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-035");
+
+    // Anyone -- not just a regulator -- can leave a tip. It's read-only:
+    // the batch's hold state is untouched, this only emits an event.
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::report_suspicion(&shared_batch, b"Seal looked tampered with", &clock, ctx);
+        assert!(!batch::is_held(&shared_batch), 0);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 33 == batch::EEmptySuspicionNote.
+#[test, expected_failure(abort_code = 33)]
+fun test_report_suspicion_rejects_empty_note() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-036");
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::report_suspicion(&shared_batch, b"", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+/// Registers a batch with a nonzero stake, for the slash/withdraw tests.
+fun setup_staked_batch(
+    scenario: &mut test_scenario::Scenario,
+    batch_code: vector<u8>,
+    expiry_ms: u64,
+    stake_amount: u64,
+) {
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+    scenario.next_tx(MANUFACTURER);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let stake = coin::mint_for_testing<SUI>(stake_amount, ctx);
+        batch::create_batch(&registry, batch_code, b"Amoxicillin 500mg", expiry_ms, stake, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+}
+
+#[test]
+fun test_place_critical_counterfeit_hold_slashes_stake_to_regulator() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-037", FAR_FUTURE_MS, 500);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+
+        assert!(batch::stake_amount(&shared_batch) == 500, 0);
+
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Confirmed counterfeit packaging",
+            batch::severity_critical(),
+            batch::category_counterfeit(),
+            b"CASE-2026-037",
+            &clock,
+            ctx,
+        );
+
+        // The stake is gone from the batch -- it was transferred out to
+        // the regulator (MANUFACTURER here, since they placed the hold on
+        // their own batch in this test -- the point being: whoever calls
+        // place_hold with this exact combination receives it).
+        assert!(batch::stake_amount(&shared_batch) == 0, 1);
+
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    // Confirm the slashed coin actually landed in the regulator's wallet.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let slashed = scenario.take_from_sender<coin::Coin<SUI>>();
+        assert!(coin::value(&slashed) == 500, 2);
+        test_scenario::return_to_sender(&scenario, slashed);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_non_counterfeit_critical_hold_does_not_slash_stake() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-038", FAR_FUTURE_MS, 500);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+
+        // Critical, but a cold-chain breach rather than counterfeit -- the
+        // stake is specifically a counterfeit bond, not a general-purpose
+        // penalty for any Critical hold.
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Refrigeration failure in transit",
+            batch::severity_critical(),
+            batch::category_cold_chain_breach(),
+            b"CASE-2026-038",
+            &clock,
+            ctx,
+        );
+
+        assert!(batch::stake_amount(&shared_batch) == 500, 0);
+
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_withdraw_stake_after_expiry_with_no_counterfeit_hold() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-039", 1_000, 700);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(1_001); // past expiry_ms of 1_000
+
+        batch::withdraw_stake(&mut shared_batch, &clock, ctx);
+        assert!(batch::stake_amount(&shared_batch) == 0, 0);
+
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let refund = scenario.take_from_sender<coin::Coin<SUI>>();
+        assert!(coin::value(&refund) == 700, 1);
+        test_scenario::return_to_sender(&scenario, refund);
+    };
+
+    scenario.end();
+}
+
+// abort_code 35 == batch::EStakeLockedUntilExpiry.
+#[test, expected_failure(abort_code = 35)]
+fun test_withdraw_stake_rejects_before_expiry() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-040", FAR_FUTURE_MS, 700);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::withdraw_stake(&mut shared_batch, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 34 == batch::ENotBatchManufacturer ("not *this batch's*
+// manufacturer" -- distinct from ENotManufacturer, which gates
+// create_batch against the ManufacturerRegistry).
+#[test, expected_failure(abort_code = 34)]
+fun test_withdraw_stake_rejects_non_manufacturer() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-041", 1_000, 700);
+
+    scenario.next_tx(PHARMACY);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(1_001);
+        batch::withdraw_stake(&mut shared_batch, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 36 == batch::EStakeAlreadyEmpty.
+#[test, expected_failure(abort_code = 36)]
+fun test_withdraw_stake_rejects_double_withdraw() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-042", 1_000, 700);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(1_001);
+        batch::withdraw_stake(&mut shared_batch, &clock, ctx);
+        batch::withdraw_stake(&mut shared_batch, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
     };
 
     scenario.end();

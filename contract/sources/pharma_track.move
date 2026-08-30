@@ -90,6 +90,7 @@ module pharma_track::batch;
 use std::hash;
 use std::option::{Self, Option};
 use std::string::{Self, String};
+use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
 use sui::event;
@@ -194,6 +195,15 @@ public struct Batch has key {
     /// severity-scaled review window. Reset to `false` whenever a new hold
     /// is placed or the current one is released.
     hold_escalated: bool,
+    /// Manufacturer-posted collateral, put up at registration and locked
+    /// for the batch's whole shelf life. `place_hold` slashes it to the
+    /// regulator's address the moment anyone places a Critical +
+    /// Counterfeit hold; `withdraw_stake` lets the manufacturer reclaim it,
+    /// but only after `expiry_ms` has passed with no such hold ever placed.
+    /// A manufacturer with nothing at risk has no on-chain cost to cutting
+    /// corners — this gives counterfeiting (specifically) a real, forfeitable
+    /// financial consequence instead of just a reputational one.
+    stake: Balance<SUI>,
 }
 
 /// Shared allow-list of addresses that can manage the regulator and
@@ -289,6 +299,38 @@ public struct BatchCreated has copy, drop {
     manufacturer: address,
     created_at_ms: u64,
     expiry_ms: u64,
+    stake_amount: u64,
+}
+
+/// Emitted by `report_suspicion` — a permissionless, public "something
+/// looks wrong here" signal from anyone (customer, pharmacist, competitor),
+/// distinct from a regulator's `BatchHeld`. Doesn't change any on-chain
+/// state by itself; it's a tip, not a verdict. The Verify page surfaces
+/// these so a regulator deciding whether to investigate isn't relying on
+/// out-of-band channels to hear about a suspicious batch in the first place.
+public struct SuspicionReported has copy, drop {
+    batch_id: address,
+    reporter: address,
+    note: String,
+    reported_at_ms: u64,
+}
+
+/// Emitted by `place_hold` when a Critical + Counterfeit hold slashes the
+/// batch's stake to the placing regulator.
+public struct StakeSlashed has copy, drop {
+    batch_id: address,
+    regulator: address,
+    amount: u64,
+    slashed_at_ms: u64,
+}
+
+/// Emitted by `withdraw_stake` once the manufacturer reclaims their
+/// collateral after the batch's shelf life ends with no counterfeit hold.
+public struct StakeWithdrawn has copy, drop {
+    batch_id: address,
+    manufacturer: address,
+    amount: u64,
+    withdrawn_at_ms: u64,
 }
 
 public struct CheckpointAdded has copy, drop {
@@ -396,6 +438,10 @@ const ENotCurrentAdmin: u64 = 29;
 const ECannotRemoveLastAdmin: u64 = 30;
 const EHoldAlreadyEscalated: u64 = 31;
 const EHoldNotYetOverdue: u64 = 32;
+const EEmptySuspicionNote: u64 = 33;
+const ENotBatchManufacturer: u64 = 34;
+const EStakeLockedUntilExpiry: u64 = 35;
+const EStakeAlreadyEmpty: u64 = 36;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -462,11 +508,19 @@ const ADVISORY_REVIEW_MS: u64 = 2_592_000_000;
 /// would just be a self-declared label, not a vetted claim. `expiry_ms`
 /// must be strictly after the registration time; a batch that's already
 /// expired the moment it's created isn't a real product.
+///
+/// `stake_payment` is locked into the batch as collateral for its whole
+/// shelf life — see the `Batch.stake` doc comment. Pass a zero-value coin
+/// (`coin::zero<SUI>(ctx)`) to register without staking anything; nothing
+/// about registration itself requires a nonzero stake, but a batch with no
+/// stake also has nothing for `place_hold` to slash on a Critical +
+/// Counterfeit finding.
 public entry fun create_batch(
     registry: &ManufacturerRegistry,
     batch_code: vector<u8>,
     product_name: vector<u8>,
     expiry_ms: u64,
+    stake_payment: Coin<SUI>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -477,6 +531,9 @@ public entry fun create_batch(
 
     let now = clock.timestamp_ms();
     assert!(expiry_ms > now, EInvalidExpiry);
+
+    let stake = coin::into_balance(stake_payment);
+    let stake_amount = stake.value();
 
     let batch = Batch {
         id: object::new(ctx),
@@ -497,6 +554,7 @@ public entry fun create_batch(
         pending_release_by: option::none(),
         pending_release_note: option::none(),
         hold_escalated: false,
+        stake,
     };
 
     event::emit(BatchCreated {
@@ -506,6 +564,7 @@ public entry fun create_batch(
         manufacturer: sender,
         created_at_ms: now,
         expiry_ms,
+        stake_amount,
     });
 
     transfer::share_object(batch);
@@ -725,6 +784,67 @@ public entry fun place_hold(
         category,
         case_reference: batch.hold_case_reference,
         held_at_ms: now,
+    });
+
+    // A Critical + Counterfeit finding is the one hold combination with a
+    // real financial claim behind it: the manufacturer put up collateral
+    // specifically against this outcome. Slashing it to the regulator who
+    // caught it (rather than burning it or routing it to a treasury) turns
+    // enforcement into a paid bounty, not just unpaid diligence.
+    if (severity == SEVERITY_CRITICAL && category == CATEGORY_COUNTERFEIT && batch.stake.value() > 0) {
+        let amount = batch.stake.value();
+        let slashed = coin::from_balance(batch.stake.withdraw_all(), ctx);
+        transfer::public_transfer(slashed, sender);
+        event::emit(StakeSlashed {
+            batch_id: object::uid_to_address(&batch.id),
+            regulator: sender,
+            amount,
+            slashed_at_ms: now,
+        });
+    };
+}
+
+/// Report a batch as suspicious — a permissionless public tip, distinct
+/// from a regulator's `place_hold`. Doesn't freeze anything or require any
+/// registry membership; anyone (a customer noticing a mismatched seal, a
+/// pharmacist, a competitor) can leave a note. This is intentionally as
+/// unrestricted as `add_checkpoint`: the goal is making sure a tip reaches
+/// a regulator's attention at all, not gatekeeping who's allowed to raise
+/// one — a real recall often starts with exactly this kind of unverified
+/// public report.
+public entry fun report_suspicion(batch: &Batch, note: vector<u8>, clock: &Clock, ctx: &TxContext) {
+    assert!(note.length() > 0, EEmptySuspicionNote);
+    event::emit(SuspicionReported {
+        batch_id: object::uid_to_address(&batch.id),
+        reporter: ctx.sender(),
+        note: string::utf8(note),
+        reported_at_ms: clock.timestamp_ms(),
+    });
+}
+
+/// Reclaim the manufacturer's staked collateral once the batch's shelf
+/// life is over. Requires the caller to be this specific batch's
+/// manufacturer, the batch to not currently be held, and the clock to be
+/// past `expiry_ms` — collateral stays locked for the batch's entire
+/// active life, not just until the manufacturer feels like withdrawing it,
+/// otherwise a manufacturer could unstake early and let a problem surface
+/// only after the money's already back in their wallet.
+public entry fun withdraw_stake(batch: &mut Batch, clock: &Clock, ctx: &mut TxContext) {
+    let sender = ctx.sender();
+    assert!(sender == batch.manufacturer, ENotBatchManufacturer);
+    assert!(!batch.is_held, EBatchHeld);
+    assert!(clock.timestamp_ms() >= batch.expiry_ms, EStakeLockedUntilExpiry);
+    let amount = batch.stake.value();
+    assert!(amount > 0, EStakeAlreadyEmpty);
+
+    let refund = coin::from_balance(batch.stake.withdraw_all(), ctx);
+    transfer::public_transfer(refund, sender);
+
+    event::emit(StakeWithdrawn {
+        batch_id: object::uid_to_address(&batch.id),
+        manufacturer: sender,
+        amount,
+        withdrawn_at_ms: clock.timestamp_ms(),
     });
 }
 
@@ -994,6 +1114,10 @@ public fun manufacturer(batch: &Batch): address { batch.manufacturer }
 public fun created_at_ms(batch: &Batch): u64 { batch.created_at_ms }
 
 public fun expiry_ms(batch: &Batch): u64 { batch.expiry_ms }
+
+/// Remaining staked collateral on this batch, in MIST — 0 once withdrawn
+/// or slashed. See the `Batch.stake` doc comment.
+public fun stake_amount(batch: &Batch): u64 { batch.stake.value() }
 
 public fun checkpoint_count(batch: &Batch): u64 { batch.checkpoints.length() }
 

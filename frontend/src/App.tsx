@@ -6,8 +6,9 @@ import { BatchLookup } from './components/BatchLookup';
 import { MintUnitForm } from './components/MintUnitForm';
 import { PurchaseUnitScanner } from './components/PurchaseUnitScanner';
 import { ActiveHoldsDashboard } from './components/ActiveHoldsDashboard';
+import { StatsDashboard } from './components/StatsDashboard';
 
-export type Tab = 'register' | 'scan' | 'verify' | 'mint' | 'pay' | 'holds';
+export type Tab = 'register' | 'scan' | 'verify' | 'mint' | 'pay' | 'holds' | 'stats';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('register');
@@ -50,6 +51,7 @@ export default function App() {
       {tab === 'mint' && <MintUnitForm />}
       {tab === 'pay' && <PurchaseUnitScanner initialUnitId={initialUnitId} />}
       {tab === 'holds' && <ActiveHoldsDashboard onSelectBatch={handleSelectBatchFromHolds} />}
+      {tab === 'stats' && <StatsDashboard />}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import type { AnomalyReportResult, BatchRecord, ModelVerdict } from './types';
-import { analyzeChain } from './chainAnalysis';
+import { analyzeChain, analyzeCrossBatch } from './chainAnalysis';
 
 // ---------------------------------------------------------------------------
 // Gonka Router integration.
@@ -171,6 +171,92 @@ export async function checkAnomaly(batch: BatchRecord): Promise<AnomalyReportRes
       ruleFindings,
       models: [],
       consensus: ruleFindings.length > 0 ? 'flag' : 'unavailable',
+      combinedRiskScore: null,
+    };
+  }
+
+  const flags = models.filter((m) => m.verdict === 'flag').length;
+  const consensus: AnomalyReportResult['consensus'] =
+    models.length === 2 && flags === 1
+      ? 'needs_review'
+      : flags === models.length
+        ? 'flag'
+        : 'clear';
+
+  const combinedRiskScore = Math.round(
+    models.reduce((sum, m) => sum + m.riskScore, 0) / models.length,
+  );
+
+  return { ruleFindings, models, consensus, combinedRiskScore };
+}
+
+function buildCrossBatchPrompt(batches: BatchRecord[], ruleFindings: string[]): string {
+  const perBatch = batches
+    .map((b) => {
+      const timeline =
+        b.checkpoints
+          .map((c) => `    - [${c.role}] ${c.location} at ${new Date(c.timestampMs).toISOString()} (by ${c.actor})`)
+          .join('\n') || '    (no checkpoints)';
+      const holdNote = b.isHeld
+        ? `CURRENTLY ON HOLD (severity ${b.holdSeverity}, category ${b.holdCategory}): "${b.holdReason}"`
+        : `not currently held; ${b.holdHistory.length} past hold(s)`;
+      return `Batch ${b.batchCode} (${b.objectId}) — ${holdNote}\n${timeline}`;
+    })
+    .join('\n\n');
+
+  const findings = ruleFindings.length > 0 ? ruleFindings.map((f) => `- ${f}`).join('\n') : '- none';
+
+  return [
+    `Manufacturer address: ${batches[0]?.manufacturer ?? 'unknown'}`,
+    `Number of batches from this manufacturer being compared: ${batches.length}`,
+    '',
+    'Per-batch custody timelines:',
+    perBatch,
+    '',
+    'Automated cross-batch rule findings:',
+    findings,
+    '',
+    'You are looking ACROSS these batches for patterns a single-batch review ' +
+      'would miss: the same actor address touching an implausible number of ' +
+      'this manufacturer\'s batches, repeated counterfeit findings, clustered ' +
+      'timing across supposedly independent batches, or any other sign this ' +
+      'manufacturer\'s batches are not independent of each other in a way ' +
+      'that suggests systemic rather than one-off counterfeiting. Weigh the ' +
+      'rule-based findings but form your own independent judgment.',
+  ].join('\n');
+}
+
+/**
+ * Same two-model, degrade-gracefully pattern as `checkAnomaly`, but reasons
+ * over *all* of one manufacturer's batches together instead of one batch in
+ * isolation — the kind of pattern (the same actor touching many batches,
+ * repeated counterfeit findings) that's invisible to a check scoped to a
+ * single batch by construction, not just a matter of the AI trying harder.
+ */
+export async function checkCrossBatchAnomaly(batches: BatchRecord[]): Promise<AnomalyReportResult> {
+  const ruleFindings = analyzeCrossBatch(batches);
+  const prompt = buildCrossBatchPrompt(batches, ruleFindings);
+
+  const settled = await Promise.allSettled([
+    callGonkaModel(MODEL_A, prompt),
+    callGonkaModel(MODEL_B, prompt),
+  ]);
+
+  const models: ModelVerdict[] = [];
+  settled.forEach((result, i) => {
+    const modelName = i === 0 ? MODEL_A : MODEL_B;
+    if (result.status === 'fulfilled') {
+      models.push(parseModelJson(modelName, result.value.requestId, result.value.content));
+    } else {
+      console.error(`Gonka Router cross-batch call to ${modelName} failed:`, result.reason);
+    }
+  });
+
+  if (models.length === 0) {
+    return {
+      ruleFindings,
+      models: [],
+      consensus: ruleFindings.length > 0 && batches.length >= 2 ? 'flag' : 'unavailable',
       combinedRiskScore: null,
     };
   }
