@@ -2,6 +2,8 @@ import { useSuiClientQuery } from '@mysten/dapp-kit';
 import { PACKAGE_ID } from '../lib/network';
 import { computeActiveHolds } from '../lib/activeHolds';
 import { CategoryBadge, SeverityBadge } from './HoldControl';
+import { CodeChip } from './CodeChip';
+import { explorerAddressUrl } from '../lib/explorer';
 import type { HoldCategory, HoldSeverity } from '../lib/types';
 
 interface ActiveHoldsDashboardProps {
@@ -66,7 +68,8 @@ export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProp
               </div>
               <div className="ledger-meta">
                 Case <span className="code-chip">{h.caseReference}</span> · held by{' '}
-                <span className="code-chip">{h.heldBy}</span> at {new Date(h.heldAtMs).toLocaleString()}
+                <CodeChip value={h.heldBy} href={explorerAddressUrl(h.heldBy)} /> at{' '}
+                {new Date(h.heldAtMs).toLocaleString()}
               </div>
               <div className="ledger-note">"{h.reason}"</div>
               <button

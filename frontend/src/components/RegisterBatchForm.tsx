@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, MANUFACTURER_REGISTRY_OBJECT_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
+import { useAdminCap, useIsListed } from '../lib/registry';
+import { useToast } from '../lib/toast';
 import { QrCodeCard } from './QrCodeCard';
 import { ItemQrSheet } from './ItemQrSheet';
+import { CodeChip } from './CodeChip';
+import { RegistryAdminPanel } from './RegistryAdminPanel';
+import { explorerTxUrl } from '../lib/explorer';
 
 interface CreatedObjectChange {
   type: string;
@@ -12,14 +17,33 @@ interface CreatedObjectChange {
   objectType?: string;
 }
 
+/** Default expiry offset for the date input: two years out, a reasonable
+ * pharma shelf-life default the manufacturer can override. */
+const DEFAULT_EXPIRY_DAYS = 730;
+
+function defaultExpiryDateInput(): string {
+  const d = new Date(Date.now() + DEFAULT_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+  return d.toISOString().slice(0, 10);
+}
+
 export function RegisterBatchForm() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
+  const toast = useToast();
+  const { isListed: isManufacturer, isLoading: manuLoading } = useIsListed(
+    MANUFACTURER_REGISTRY_OBJECT_ID,
+    'manufacturers',
+  );
+  const { adminCapId, refetch: refetchAdmin } = useAdminCap();
 
   const [batchCode, setBatchCode] = useState('');
   const [productName, setProductName] = useState('');
+  const [expiryDate, setExpiryDate] = useState(defaultExpiryDateInput());
   const [error, setError] = useState<string | null>(null);
   const [createdBatchId, setCreatedBatchId] = useState<string | null>(null);
+  const [lastDigest, setLastDigest] = useState<string | null>(null);
+
+  const canAct = Boolean(account && isManufacturer && !manuLoading);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -30,12 +54,20 @@ export function RegisterBatchForm() {
       return;
     }
 
+    const expiryMs = new Date(expiryDate).getTime();
+    if (!expiryDate || Number.isNaN(expiryMs) || expiryMs <= Date.now()) {
+      setError('Expiry date must be a valid date in the future.');
+      return;
+    }
+
     const tx = new Transaction();
     tx.moveCall({
       target: target('create_batch'),
       arguments: [
+        tx.object(MANUFACTURER_REGISTRY_OBJECT_ID),
         tx.pure.string(batchCode.trim()),
         tx.pure.string(productName.trim()),
+        tx.pure.u64(expiryMs),
         tx.object(CLOCK_OBJECT_ID),
       ],
     });
@@ -50,6 +82,8 @@ export function RegisterBatchForm() {
           );
           if (created?.objectId) {
             setCreatedBatchId(created.objectId);
+            setLastDigest(result.digest);
+            toast.success('Batch registered.');
           } else {
             setError(
               'Batch was created, but the new object ID could not be read from the result. Check the browser console for the full transaction response.',
@@ -57,7 +91,7 @@ export function RegisterBatchForm() {
             console.log('Transaction result:', result);
           }
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -71,11 +105,19 @@ export function RegisterBatchForm() {
       <h2>Register a new batch</h2>
       <p className="panel-intro">
         Called once by the manufacturer. This creates a shared object on Sui that every later
-        checkpoint — distributor, pharmacy, and so on — will attach to.
+        checkpoint — distributor, pharmacy, and so on — will attach to. Only addresses listed in
+        the manufacturer registry can do this — otherwise "manufacturer" would just be a
+        self-declared label anyone could type.
       </p>
 
       {!account && <p className="error-text">Connect a wallet to register a batch.</p>}
       {error && <p className="error-text">{error}</p>}
+      {account && !manuLoading && !isManufacturer && (
+        <p className="error-text">
+          Your connected wallet is not a listed manufacturer, so it cannot register a batch. Ask
+          an admin to add your address to the manufacturer registry.
+        </p>
+      )}
 
       <form onSubmit={handleSubmit}>
         <div className="field-row">
@@ -86,7 +128,7 @@ export function RegisterBatchForm() {
               value={batchCode}
               onChange={(e) => setBatchCode(e.target.value)}
               placeholder="e.g. AMX-2026-0417"
-              disabled={!account || isPending}
+              disabled={!canAct || isPending}
             />
           </div>
           <div className="field">
@@ -96,19 +138,50 @@ export function RegisterBatchForm() {
               value={productName}
               onChange={(e) => setProductName(e.target.value)}
               placeholder="e.g. Amoxicillin 500mg"
-              disabled={!account || isPending}
+              disabled={!canAct || isPending}
             />
           </div>
         </div>
 
-        <button type="submit" className="btn btn-primary" disabled={!account || isPending}>
+        <div className="field">
+          <label htmlFor="expiryDate">Expiry date</label>
+          <input
+            id="expiryDate"
+            type="date"
+            value={expiryDate}
+            onChange={(e) => setExpiryDate(e.target.value)}
+            disabled={!canAct || isPending}
+          />
+        </div>
+
+        <button type="submit" className="btn btn-primary" disabled={!canAct || isPending}>
           {isPending ? 'Registering on-chain…' : 'Register batch'}
         </button>
       </form>
 
+      {adminCapId && (
+        <RegistryAdminPanel
+          adminCapId={adminCapId}
+          registryObjectId={MANUFACTURER_REGISTRY_OBJECT_ID}
+          addFn="admin_add_manufacturer"
+          revokeFn="admin_revoke_manufacturer"
+          roleLabel="manufacturer"
+          onChanged={refetchAdmin}
+        />
+      )}
+
       {createdBatchId && verifyUrl && (
         <div style={{ marginTop: 24 }}>
-          <p className="success-banner">Batch registered. Print this QR code onto the physical packaging.</p>
+          <p className="success-banner">
+            Batch registered — <CodeChip value={createdBatchId} /> (expires {expiryDate}).
+            {lastDigest && (
+              <>
+                {' '}
+                Transaction: <CodeChip value={lastDigest} href={explorerTxUrl(lastDigest)} title="View on Sui Explorer" />
+              </>
+            )}
+            {' '}Print this QR code onto the physical packaging.
+          </p>
           <QrCodeCard
             value={verifyUrl}
             label="Scan to verify this batch"

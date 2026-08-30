@@ -6,6 +6,9 @@ import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, UNIT_EXPIRY_MS, target } from '../lib
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { parseBatchObject, parseUnitObject } from '../lib/suiRead';
 import { extractUnitId } from '../lib/qr';
+import { useToast } from '../lib/toast';
+import { CodeChip } from './CodeChip';
+import { explorerTxUrl } from '../lib/explorer';
 import { QrScanButton } from './QrScanButton';
 
 interface PurchaseUnitScannerProps {
@@ -15,10 +18,11 @@ interface PurchaseUnitScannerProps {
 export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps) {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
+  const toast = useToast();
 
   const [unitId, setUnitId] = useState(initialUnitId ?? '');
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [lastDigest, setLastDigest] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -57,7 +61,6 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
   function handlePay() {
     if (!unit) return;
     setError(null);
-    setSuccess(null);
 
     const tx = new Transaction();
     const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(unit.price)]);
@@ -70,12 +73,11 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
         onSuccess: (result) => {
-          setSuccess(
-            `Payment sent, medicine dispensed. This QR is now burned — transaction digest: ${result.digest}`,
-          );
+          setLastDigest(result.digest);
+          toast.success('Payment sent, medicine dispensed. This QR is now burned.');
           refetch();
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -102,7 +104,12 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
 
       {!account && <p className="error-text">Connect a wallet to pay.</p>}
       {error && <p className="error-text">{error}</p>}
-      {success && <p className="success-banner">{success}</p>}
+      {lastDigest && (
+        <p className="success-banner">
+          Payment sent, medicine dispensed. This QR is now burned. Transaction:{' '}
+          <CodeChip value={lastDigest} href={explorerTxUrl(lastDigest)} title="View on Sui Explorer" />
+        </p>
+      )}
 
       <QrScanButton onDecoded={(text) => setUnitId(extractUnitId(text))} />
 
@@ -134,11 +141,18 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
         </p>
       )}
 
-      {unit && !expired && !batch?.isHeld && (
+      {unit && batch && !batch.isHeld && batch.expiryMs <= Date.now() && (
+        <p className="error-text" style={{ marginTop: 16 }}>
+          🚫 SALE BLOCKED — this batch expired on {new Date(batch.expiryMs).toLocaleDateString()}.
+          Payment is disabled on-chain for expired batches; do not accept this medicine.
+        </p>
+      )}
+
+      {unit && !expired && !batch?.isHeld && batch && batch.expiryMs > Date.now() && (
         <div style={{ marginTop: 16 }}>
           <p className="helper-text">
             Price <span className="code-chip">{priceSui} SUI</span> · batch{' '}
-            <span className="code-chip">{unit.batchId}</span> · expires in{' '}
+            <CodeChip value={unit.batchId} /> · expires in{' '}
             <span className="code-chip">{remainingLabel}</span>
           </p>
           <button

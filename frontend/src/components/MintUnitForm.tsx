@@ -5,6 +5,7 @@ import { MIST_PER_SUI } from '@mysten/sui/utils';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { parseBatchObject } from '../lib/suiRead';
+import { useToast } from '../lib/toast';
 import { QrCodeCard } from './QrCodeCard';
 
 interface CreatedObjectChange {
@@ -16,6 +17,7 @@ interface CreatedObjectChange {
 export function MintUnitForm() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
+  const toast = useToast();
 
   const [batchId, setBatchId] = useState('');
   const [priceSui, setPriceSui] = useState('');
@@ -46,6 +48,10 @@ export function MintUnitForm() {
       setError('This batch is on hold — sale QRs can\'t be minted until the hold is released.');
       return;
     }
+    if (batch && batch.expiryMs <= Date.now()) {
+      setError('This batch has expired — sale QRs can\'t be minted for it anymore.');
+      return;
+    }
     if (!priceSui.trim() || !Number.isFinite(priceNum) || priceNum <= 0) {
       setError('Price must be a positive number of SUI.');
       return;
@@ -69,6 +75,7 @@ export function MintUnitForm() {
           );
           if (created?.objectId) {
             setCreatedUnitId(created.objectId);
+            toast.success('Sale QR minted.');
           } else {
             setError(
               'Unit was minted, but the new object ID could not be read from the result. Check the browser console for the full transaction response.',
@@ -76,7 +83,7 @@ export function MintUnitForm() {
             console.log('Transaction result:', result);
           }
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -103,6 +110,12 @@ export function MintUnitForm() {
         <p className="error-text">
           🚫 This batch is currently on hold ({batch.holdReason || 'no reason given'}) — minting is
           blocked on-chain until the hold is released.
+        </p>
+      )}
+      {batch && !batch.isHeld && batch.expiryMs <= Date.now() && (
+        <p className="error-text">
+          🚫 This batch expired on {new Date(batch.expiryMs).toLocaleDateString()} — minting is
+          blocked on-chain for expired batches.
         </p>
       )}
 
@@ -133,7 +146,11 @@ export function MintUnitForm() {
           </div>
         </div>
 
-        <button type="submit" className="btn btn-primary" disabled={!account || isPending || Boolean(batch?.isHeld)}>
+        <button
+          type="submit"
+          className="btn btn-primary"
+          disabled={!account || isPending || Boolean(batch?.isHeld) || Boolean(batch && batch.expiryMs <= Date.now())}
+        >
           {isPending ? 'Minting on-chain…' : 'Mint single-use QR'}
         </button>
       </form>

@@ -5,24 +5,27 @@ import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { QrScanButton } from './QrScanButton';
 import { extractBatchId } from '../lib/qr';
+import { useToast } from '../lib/toast';
+import { CodeChip } from './CodeChip';
+import { explorerTxUrl } from '../lib/explorer';
 
 const ROLES = ['distributor', 'pharmacy', 'other'];
 
 export function CheckpointScanner() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
+  const toast = useToast();
 
   const [batchId, setBatchId] = useState('');
   const [role, setRole] = useState(ROLES[0]);
   const [location, setLocation] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [lastDigest, setLastDigest] = useState<string | null>(null);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
 
     if (!batchId.trim() || !location.trim()) {
       setError('Batch object ID and location are both required.');
@@ -45,11 +48,12 @@ export function CheckpointScanner() {
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
         onSuccess: (result) => {
-          setSuccess(`Checkpoint recorded. Transaction digest: ${result.digest}`);
+          setLastDigest(result.digest);
+          toast.success('Checkpoint recorded.');
           setLocation('');
           setNote('');
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -65,7 +69,12 @@ export function CheckpointScanner() {
 
       {!account && <p className="error-text">Connect a wallet to record a checkpoint.</p>}
       {error && <p className="error-text">{error}</p>}
-      {success && <p className="success-banner">{success}</p>}
+      {lastDigest && (
+        <p className="success-banner">
+          Checkpoint recorded. Transaction:{' '}
+          <CodeChip value={lastDigest} href={explorerTxUrl(lastDigest)} title="View on Sui Explorer" />
+        </p>
+      )}
 
       <QrScanButton onDecoded={(text) => setBatchId(extractBatchId(text))} />
 

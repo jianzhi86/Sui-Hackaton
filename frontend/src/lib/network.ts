@@ -41,6 +41,16 @@ export const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID || '0x0';
  */
 export const REGISTRY_OBJECT_ID = import.meta.env.VITE_REGISTRY_OBJECT_ID || '0x0';
 
+/**
+ * Object ID of the shared `ManufacturerRegistry`, created once at publish
+ * time alongside `RegulatorRegistry` — same caveat: not derivable from
+ * the package ID, copy it from the same publish output ("Created
+ * Objects" — the one with type `...::batch::ManufacturerRegistry`) into
+ * `.env` as `VITE_MANUFACTURER_REGISTRY_OBJECT_ID`.
+ */
+export const MANUFACTURER_REGISTRY_OBJECT_ID =
+  import.meta.env.VITE_MANUFACTURER_REGISTRY_OBJECT_ID || '0x0';
+
 export const MODULE_NAME = 'batch';
 
 /** Sui's shared Clock object always lives at this fixed address. */

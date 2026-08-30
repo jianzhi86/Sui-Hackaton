@@ -41,6 +41,8 @@ export interface BatchRecord {
   productName: string;
   manufacturer: string;
   createdAtMs: number;
+  /** Absolute timestamp (ms) after which the batch can no longer be sold. */
+  expiryMs: number;
   checkpoints: Checkpoint[];
   isHeld: boolean;
   holdReason: string;

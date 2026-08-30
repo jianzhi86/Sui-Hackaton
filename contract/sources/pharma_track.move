@@ -48,6 +48,22 @@
 /// one. This mirrors how real recalls work: one person can pull the
 /// emergency brake alone, but nobody unilaterally decides a critical
 /// stop-sale is over.
+///
+/// `create_batch` is similarly gated by a `ManufacturerRegistry` (the same
+/// allow-list pattern as `RegulatorRegistry`, managed by the same
+/// `AdminCap`): without it, anyone could call `create_batch` and claim to
+/// be any manufacturer, since `manufacturer` is otherwise just whoever
+/// happened to sign the transaction. This closes that gap without
+/// changing how the rest of the system already treats `manufacturer` —
+/// it's still `ctx.sender()`, just from a sender who's now been vetted.
+///
+/// Every batch also carries an `expiry_ms` set at registration. Like a
+/// hold, expiry gates sales: `mint_unit` and `purchase_and_burn` both
+/// abort once the batch has expired, on the same reasoning as the hold
+/// checks — expired stock shouldn't be sellable, not just flagged as
+/// expired after the fact. Unlike a hold, expiry is never reversible by a
+/// regulator action; it's a fact about the physical product, not a
+/// decision anyone gets to walk back.
 module pharma_track::batch;
 
 use std::option::{Self, Option};
@@ -114,6 +130,9 @@ public struct Batch has key {
     product_name: String,
     manufacturer: address,
     created_at_ms: u64,
+    /// Absolute timestamp (ms) after which this batch can no longer be
+    /// sold — set once at registration, never changed afterward.
+    expiry_ms: u64,
     checkpoints: vector<Checkpoint>,
     /// True while the batch is under hold (e.g. a suspected counterfeit or
     /// a recall). While held, `add_checkpoint` aborts — the custody chain
@@ -155,6 +174,17 @@ public struct RegulatorRegistry has key {
     regulators: VecSet<address>,
 }
 
+/// The shared allow-list of addresses that can call `create_batch`. Same
+/// pattern and same `AdminCap` as `RegulatorRegistry` — a separate struct
+/// rather than reusing one registry for both roles because a manufacturer
+/// and a regulator are different real-world parties with different
+/// trust boundaries, even though this MVP happens to seed the deployer
+/// into both at publish time.
+public struct ManufacturerRegistry has key {
+    id: UID,
+    manufacturers: VecSet<address>,
+}
+
 /// One physical, sellable dose/pack of a batch, represented as its own
 /// shared object so it can be individually addressed by a single QR code.
 /// A pharmacy mints one `Unit` per physical package it puts on the shelf;
@@ -181,6 +211,10 @@ fun init(ctx: &mut TxContext) {
     let mut regulators = vec_set::empty<address>();
     regulators.insert(sender);
     transfer::share_object(RegulatorRegistry { id: object::new(ctx), regulators });
+
+    let mut manufacturers = vec_set::empty<address>();
+    manufacturers.insert(sender);
+    transfer::share_object(ManufacturerRegistry { id: object::new(ctx), manufacturers });
 }
 
 #[test_only]
@@ -202,6 +236,7 @@ public struct BatchCreated has copy, drop {
     product_name: String,
     manufacturer: address,
     created_at_ms: u64,
+    expiry_ms: u64,
 }
 
 public struct CheckpointAdded has copy, drop {
@@ -282,6 +317,11 @@ const ENotRegulator: u64 = 16;
 const EAlreadyRegulator: u64 = 17;
 const ENotCurrentRegulator: u64 = 18;
 const EInvalidCategory: u64 = 19;
+const ENotManufacturer: u64 = 20;
+const EAlreadyManufacturer: u64 = 21;
+const ENotCurrentManufacturer: u64 = 22;
+const EInvalidExpiry: u64 = 23;
+const EBatchExpired: u64 = 24;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -320,18 +360,26 @@ const UNIT_EXPIRY_MS: u64 = 600_000;
 // ===== Entry functions =====
 
 /// Create a new batch and share it immediately so every later party in the
-/// supply chain can attach a checkpoint to the same object.
+/// supply chain can attach a checkpoint to the same object. Requires the
+/// caller's address to be listed in `registry` — otherwise `manufacturer`
+/// would just be a self-declared label, not a vetted claim. `expiry_ms`
+/// must be strictly after the registration time; a batch that's already
+/// expired the moment it's created isn't a real product.
 public entry fun create_batch(
+    registry: &ManufacturerRegistry,
     batch_code: vector<u8>,
     product_name: vector<u8>,
+    expiry_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    let sender = ctx.sender();
+    assert!(registry.manufacturers.contains(&sender), ENotManufacturer);
     assert!(batch_code.length() > 0, EEmptyBatchCode);
     assert!(product_name.length() > 0, EEmptyProductName);
 
-    let sender = ctx.sender();
     let now = clock.timestamp_ms();
+    assert!(expiry_ms > now, EInvalidExpiry);
 
     let batch = Batch {
         id: object::new(ctx),
@@ -339,6 +387,7 @@ public entry fun create_batch(
         product_name: string::utf8(product_name),
         manufacturer: sender,
         created_at_ms: now,
+        expiry_ms,
         checkpoints: vector::empty<Checkpoint>(),
         is_held: false,
         hold_reason: string::utf8(b""),
@@ -358,6 +407,7 @@ public entry fun create_batch(
         product_name: batch.product_name,
         manufacturer: sender,
         created_at_ms: now,
+        expiry_ms,
     });
 
     transfer::share_object(batch);
@@ -407,8 +457,9 @@ public entry fun add_checkpoint(
 /// it via `purchase_and_burn` gets the object deleted out from under any
 /// later scan.
 ///
-/// Aborts if the batch is on hold — a recalled or suspect batch shouldn't
-/// be sellable in the first place, not just flagged after the fact.
+/// Aborts if the batch is on hold or already expired — a recalled,
+/// suspect, or out-of-date batch shouldn't be sellable in the first
+/// place, not just flagged after the fact.
 public entry fun mint_unit(
     batch: &Batch,
     price: u64,
@@ -416,9 +467,10 @@ public entry fun mint_unit(
     ctx: &mut TxContext,
 ) {
     assert!(!batch.is_held, EBatchHeld);
+    let now = clock.timestamp_ms();
+    assert!(now < batch.expiry_ms, EBatchExpired);
     assert!(price > 0, EZeroPrice);
 
-    let now = clock.timestamp_ms();
     let unit = Unit {
         id: object::new(ctx),
         batch_id: object::uid_to_address(&batch.id),
@@ -458,6 +510,7 @@ public entry fun purchase_and_burn(
     assert!(!batch.is_held, EBatchHeld);
 
     let now = clock.timestamp_ms();
+    assert!(now < batch.expiry_ms, EBatchExpired);
     assert!(now - unit.minted_at_ms <= UNIT_EXPIRY_MS, EUnitExpired);
     assert!(coin::value(&payment) == unit.price, EWrongPayment);
 
@@ -695,6 +748,31 @@ public entry fun admin_revoke_regulator(
     registry.regulators.remove(&addr);
 }
 
+/// Onboard a manufacturer by adding their address to `ManufacturerRegistry`.
+/// Same `AdminCap` as the regulator registry — one admin role governs both
+/// allow-lists in this MVP.
+public entry fun admin_add_manufacturer(
+    _admin: &AdminCap,
+    registry: &mut ManufacturerRegistry,
+    addr: address,
+) {
+    assert!(!registry.manufacturers.contains(&addr), EAlreadyManufacturer);
+    registry.manufacturers.insert(addr);
+}
+
+/// Revoke a manufacturer's ability to register new batches. Existing
+/// batches they've already created are unaffected — this only gates
+/// future `create_batch` calls, the same way revoking a regulator doesn't
+/// undo holds they already placed.
+public entry fun admin_revoke_manufacturer(
+    _admin: &AdminCap,
+    registry: &mut ManufacturerRegistry,
+    addr: address,
+) {
+    assert!(registry.manufacturers.contains(&addr), ENotCurrentManufacturer);
+    registry.manufacturers.remove(&addr);
+}
+
 // ===== Read-only accessors =====
 // The frontend normally reads a Batch by fetching the object directly via
 // `suiClient.getObject({ id, options: { showContent: true } })`, which is
@@ -710,6 +788,8 @@ public fun product_name(batch: &Batch): String { batch.product_name }
 public fun manufacturer(batch: &Batch): address { batch.manufacturer }
 
 public fun created_at_ms(batch: &Batch): u64 { batch.created_at_ms }
+
+public fun expiry_ms(batch: &Batch): u64 { batch.expiry_ms }
 
 public fun checkpoint_count(batch: &Batch): u64 { batch.checkpoints.length() }
 
@@ -798,6 +878,14 @@ public fun is_regulator(registry: &RegulatorRegistry, addr: address): bool {
 /// has access right now without needing to replay every add/revoke event.
 public fun regulators(registry: &RegulatorRegistry): vector<address> {
     *registry.regulators.keys()
+}
+
+public fun is_manufacturer(registry: &ManufacturerRegistry, addr: address): bool {
+    registry.manufacturers.contains(&addr)
+}
+
+public fun manufacturers(registry: &ManufacturerRegistry): vector<address> {
+    *registry.manufacturers.keys()
 }
 
 public fun unit_batch_id(unit: &Unit): address { unit.batch_id }

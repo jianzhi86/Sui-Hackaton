@@ -1,8 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit';
+import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, PACKAGE_ID, REGISTRY_OBJECT_ID, target } from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, REGISTRY_OBJECT_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
+import { useAdminCap, useIsListed } from '../lib/registry';
+import { useToast } from '../lib/toast';
+import { CodeChip } from './CodeChip';
+import { RegistryAdminPanel } from './RegistryAdminPanel';
+import { explorerAddressUrl } from '../lib/explorer';
 import {
   CATEGORY_COLD_CHAIN_BREACH,
   CATEGORY_COUNTERFEIT,
@@ -81,51 +86,6 @@ interface HoldControlProps {
 }
 
 /**
- * Placing/releasing a hold requires the connected address to be listed in
- * the shared `RegulatorRegistry` (an allow-list, not a bearer capability
- * object — see the Move module doc comment for why that distinction
- * matters for revocation). This reads the registry's raw `regulators`
- * field (a `VecSet<address>`, which serializes as `{ contents: [...] }`)
- * directly — no need to call into Move for a plain field read.
- */
-function useIsRegulator() {
-  const account = useCurrentAccount();
-  const { data, isLoading, refetch } = useSuiClientQuery(
-    'getObject',
-    { id: REGISTRY_OBJECT_ID, options: { showContent: true } },
-    { staleTime: 0, refetchOnMount: 'always' },
-  );
-
-  const content = data?.data?.content;
-  const regulators: string[] =
-    content && content.dataType === 'moveObject'
-      ? ((content.fields as any)?.regulators?.fields?.contents ?? [])
-      : [];
-
-  const isRegulator = Boolean(account && regulators.includes(account.address));
-  return { isRegulator, regulators, isLoading, refetch };
-}
-
-/** Whether the connected wallet holds the `AdminCap` that can add/revoke
- * regulators. Unlike registry membership, this really is a bearer
- * capability object — see the Move module doc comment on `AdminCap`. */
-function useAdminCap() {
-  const account = useCurrentAccount();
-  const { data, isLoading, refetch } = useSuiClientQuery(
-    'getOwnedObjects',
-    {
-      owner: account?.address ?? '',
-      filter: { StructType: `${PACKAGE_ID}::batch::AdminCap` },
-      options: { showContent: false },
-    },
-    { enabled: Boolean(account) },
-  );
-
-  const adminCapId = data?.data?.[0]?.data?.objectId ?? null;
-  return { adminCapId, isLoading, refetch };
-}
-
-/**
  * Lets a listed regulator place or release a hold on a batch. `place_hold`
  * freezes the on-chain custody chain: `add_checkpoint` aborts while
  * `is_held` is true, so this isn't just a cosmetic flag.
@@ -133,7 +93,8 @@ function useAdminCap() {
 export function HoldControl({ batch, onChanged }: HoldControlProps) {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
-  const { isRegulator, isLoading: regLoading } = useIsRegulator();
+  const toast = useToast();
+  const { isListed: isRegulator, isLoading: regLoading } = useIsListed(REGISTRY_OBJECT_ID, 'regulators');
   const { adminCapId, refetch: refetchAdmin } = useAdminCap();
   const [reason, setReason] = useState('');
   const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_RECALL);
@@ -178,9 +139,10 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           setCaseReference('');
           setSeverity(SEVERITY_RECALL);
           setCategory(CATEGORY_QUALITY_DEFECT);
+          toast.success('Hold placed. Sales and checkpoints are now blocked for this batch.');
           onChanged();
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -211,9 +173,10 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
         onSuccess: () => {
           setReleaseNote('');
           setConfirmingRelease(false);
+          toast.success('Hold released.');
           onChanged();
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -244,9 +207,10 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
         onSuccess: () => {
           setReleaseNote('');
           setConfirmingRelease(false);
+          toast.success('Release proposed. Waiting on a second, different regulator to confirm.');
           onChanged();
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -263,8 +227,11 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     signAndExecute(
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
-        onSuccess: () => onChanged(),
-        onError: (err) => setError(err.message),
+        onSuccess: () => {
+          toast.success('Release confirmed. This hold is now lifted.');
+          onChanged();
+        },
+        onError: (err) => toast.error(err.message),
       },
     );
   }
@@ -282,7 +249,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           <StaleHoldBadge heldAtMs={batch.heldAtMs} severity={batch.holdSeverity as HoldSeverity} />
           <p>
             Reason: "{batch.holdReason}" — case <span className="code-chip">{batch.holdCaseReference}</span>{' '}
-            — placed by <span className="code-chip">{batch.heldBy}</span> at{' '}
+            — placed by <CodeChip value={batch.heldBy} href={explorerAddressUrl(batch.heldBy)} /> at{' '}
             {new Date(batch.heldAtMs).toLocaleString()}. No new checkpoints, sale QRs, or payments
             can happen until this is released.
           </p>
@@ -298,7 +265,8 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
               {batch.pendingReleaseBy ? (
                 <div>
                   <p className="helper-text">
-                    Release proposed by <span className="code-chip">{batch.pendingReleaseBy}</span>:
+                    Release proposed by{' '}
+                    <CodeChip value={batch.pendingReleaseBy} href={explorerAddressUrl(batch.pendingReleaseBy)} />:
                     "{batch.pendingReleaseNote}". Awaiting confirmation from a <em>different</em>{' '}
                     regulator.
                   </p>
@@ -471,7 +439,16 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
               </p>
             )}
           </form>
-          {adminCapId && <AdminPanel adminCapId={adminCapId} onChanged={refetchAdmin} />}
+          {adminCapId && (
+            <RegistryAdminPanel
+              adminCapId={adminCapId}
+              registryObjectId={REGISTRY_OBJECT_ID}
+              addFn="admin_add_regulator"
+              revokeFn="admin_revoke_regulator"
+              roleLabel="regulator"
+              onChanged={refetchAdmin}
+            />
+          )}
         </div>
       )}
 
@@ -498,18 +475,19 @@ function HoldHistoryList({ history }: { history: BatchRecord['holdHistory'] }) {
             </div>
             <div className="ledger-meta">
               Case <span className="code-chip">{h.caseReference}</span> · placed by{' '}
-              <span className="code-chip">{h.heldBy}</span> at {new Date(h.heldAtMs).toLocaleString()}
+              <CodeChip value={h.heldBy} href={explorerAddressUrl(h.heldBy)} /> at{' '}
+              {new Date(h.heldAtMs).toLocaleString()}
             </div>
             <div className="ledger-note">"{h.reason}"</div>
             {h.releasedBy !== null && (
               <div className="helper-text">
                 {h.coReleasedBy ? (
                   <>
-                    Release proposed by <span className="code-chip">{h.coReleasedBy}</span>, confirmed
-                    by <span className="code-chip">{h.releasedBy}</span>
+                    Release proposed by <CodeChip value={h.coReleasedBy} href={explorerAddressUrl(h.coReleasedBy)} />,
+                    confirmed by <CodeChip value={h.releasedBy} href={explorerAddressUrl(h.releasedBy)} />
                   </>
                 ) : (
-                  <>Released by <span className="code-chip">{h.releasedBy}</span></>
+                  <>Released by <CodeChip value={h.releasedBy} href={explorerAddressUrl(h.releasedBy)} /></>
                 )}{' '}
                 at {h.releasedAtMs !== null ? new Date(h.releasedAtMs).toLocaleString() : 'unknown'}
                 {h.releaseNote && <> — "{h.releaseNote}"</>}
@@ -522,118 +500,3 @@ function HoldHistoryList({ history }: { history: BatchRecord['holdHistory'] }) {
   );
 }
 
-/**
- * Lets the `AdminCap` holder add or revoke regulator addresses. This is
- * the actual point of the allow-list design over the old bearer-capability
- * model: revocation here is a real removal from the registry, not a
- * superseded-but-still-valid object sitting in someone's wallet forever.
- */
-function AdminPanel({ adminCapId, onChanged }: { adminCapId: string; onChanged: () => void }) {
-  const { mutate: signAndExecute, isPending } = useSignAndExecute();
-  const [addAddress, setAddAddress] = useState('');
-  const [revokeAddress, setRevokeAddress] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  function handleAdd(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (!addAddress.trim()) {
-      setError('An address is required.');
-      return;
-    }
-
-    const tx = new Transaction();
-    tx.moveCall({
-      target: target('admin_add_regulator'),
-      arguments: [tx.object(adminCapId), tx.object(REGISTRY_OBJECT_ID), tx.pure.address(addAddress.trim())],
-    });
-
-    signAndExecute(
-      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
-      {
-        onSuccess: () => {
-          setSuccess(`${addAddress.trim()} added as a regulator.`);
-          setAddAddress('');
-          onChanged();
-        },
-        onError: (err) => setError(err.message),
-      },
-    );
-  }
-
-  function handleRevoke(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (!revokeAddress.trim()) {
-      setError('An address is required.');
-      return;
-    }
-
-    const tx = new Transaction();
-    tx.moveCall({
-      target: target('admin_revoke_regulator'),
-      arguments: [tx.object(adminCapId), tx.object(REGISTRY_OBJECT_ID), tx.pure.address(revokeAddress.trim())],
-    });
-
-    signAndExecute(
-      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
-      {
-        onSuccess: () => {
-          setSuccess(`${revokeAddress.trim()} revoked — that address can no longer place or release holds.`);
-          setRevokeAddress('');
-          onChanged();
-        },
-        onError: (err) => setError(err.message),
-      },
-    );
-  }
-
-  return (
-    <details style={{ marginTop: 12 }}>
-      <summary className="helper-text" style={{ cursor: 'pointer' }}>
-        Admin: manage regulator access
-      </summary>
-      <div style={{ marginTop: 8 }}>
-        <form onSubmit={handleAdd}>
-          <div className="field">
-            <label htmlFor="addRegulator">Add regulator address</label>
-            <input
-              id="addRegulator"
-              value={addAddress}
-              onChange={(e) => setAddAddress(e.target.value)}
-              placeholder="0x…"
-              disabled={isPending}
-            />
-          </div>
-          <button type="submit" className="btn btn-secondary" disabled={isPending}>
-            {isPending ? 'Adding…' : 'Add regulator'}
-          </button>
-        </form>
-
-        <form onSubmit={handleRevoke} style={{ marginTop: 12 }}>
-          <div className="field">
-            <label htmlFor="revokeRegulator">Revoke regulator address</label>
-            <input
-              id="revokeRegulator"
-              value={revokeAddress}
-              onChange={(e) => setRevokeAddress(e.target.value)}
-              placeholder="0x…"
-              disabled={isPending}
-            />
-          </div>
-          <button type="submit" className="btn btn-danger" disabled={isPending}>
-            {isPending ? 'Revoking…' : 'Revoke regulator'}
-          </button>
-        </form>
-
-        {error && <p className="error-text">{error}</p>}
-        {success && <p className="success-banner">{success}</p>}
-      </div>
-    </details>
-  );
-}

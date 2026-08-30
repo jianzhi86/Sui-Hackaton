@@ -8,6 +8,14 @@ import { extractBatchId, extractSerial } from '../lib/qr';
 import { AnomalyPanel } from './AnomalyPanel';
 import { HoldControl } from './HoldControl';
 import { ItemQrSheet } from './ItemQrSheet';
+import { CodeChip } from './CodeChip';
+import { explorerAddressUrl } from '../lib/explorer';
+import { useToast } from '../lib/toast';
+
+/** How far ahead of expiry the UI starts warning — 60 days, a reasonable
+ * pharma "reorder before this runs out" window. Purely a UI nudge; the
+ * actual sale-blocking check happens on-chain at the exact expiry_ms. */
+const NEAR_EXPIRY_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
 
 interface BatchLookupProps {
   initialBatchId?: string;
@@ -15,6 +23,7 @@ interface BatchLookupProps {
 }
 
 export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps) {
+  const toast = useToast();
   const [batchId, setBatchId] = useState(initialBatchId ?? '');
   const [queryId, setQueryId] = useState(initialBatchId ?? '');
   const [serial, setSerial] = useState<string | null>(initialSerial ?? null);
@@ -91,6 +100,11 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
       setReport(result);
       setLastReportFingerprint(batchFingerprint);
       setReportInvalidated(false);
+      if (result.models.length === 0) {
+        toast.error('Gonka Router was unreachable — showing rule-based findings only.');
+      } else {
+        toast.success('AI verification complete.');
+      }
     } finally {
       setChecking(false);
     }
@@ -166,8 +180,20 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
                 · package <span className="code-chip">#{serial}</span>
               </>
             )}{' '}
-            · registered by <span className="code-chip">{batch.manufacturer}</span>
+            · registered by <CodeChip value={batch.manufacturer} href={explorerAddressUrl(batch.manufacturer)} /> ·
+            expires {new Date(batch.expiryMs).toLocaleDateString()}
           </p>
+
+          {batch.expiryMs <= Date.now() ? (
+            <p className="error-text">
+              🚫 This batch expired on {new Date(batch.expiryMs).toLocaleDateString()} — sale QRs
+              can no longer be minted or redeemed for it.
+            </p>
+          ) : batch.expiryMs - Date.now() <= NEAR_EXPIRY_WINDOW_MS ? (
+            <p className="helper-text" style={{ color: 'var(--flag-amber)' }}>
+              ⚠ Expires soon — {new Date(batch.expiryMs).toLocaleDateString()}.
+            </p>
+          ) : null}
 
           <HoldControl batch={batch} onChanged={() => refetch()} />
 
@@ -186,7 +212,7 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
                 </div>
                 {cp.note && <div className="ledger-note">{cp.note}</div>}
                 <div className="helper-text">
-                  Recorded by <span className="code-chip">{cp.actor}</span>
+                  Recorded by <CodeChip value={cp.actor} href={explorerAddressUrl(cp.actor)} />
                 </div>
               </div>
             ))}

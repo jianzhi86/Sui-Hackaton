@@ -78,6 +78,7 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
     productName: String(fields.product_name ?? ''),
     manufacturer: String(fields.manufacturer ?? ''),
     createdAtMs: asNumber(fields.created_at_ms),
+    expiryMs: asNumber(fields.expiry_ms),
     checkpoints,
     isHeld: Boolean(fields.is_held),
     holdReason: String(fields.hold_reason ?? ''),

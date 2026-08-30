@@ -367,6 +367,92 @@ a:focus-visible {
   border-radius: 4px;
   padding: 2px 6px;
   word-break: break-all;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.code-chip:hover {
+  border-color: var(--verify-teal);
+  color: var(--verify-teal);
+}
+
+.code-chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.copy-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px;
+  color: var(--ink-soft);
+}
+
+.copy-btn:hover {
+  color: var(--verify-teal);
+}
+
+/* ---------- Toast notifications ---------- */
+
+.toast-stack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: min(360px, calc(100vw - 40px));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-raised);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+}
+
+.toast-success {
+  border-color: var(--verify-teal);
+  background: var(--verify-teal-soft);
+}
+
+.toast-error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.toast-info {
+  border-color: var(--flag-amber);
+  background: var(--flag-amber-soft);
+}
+
+.toast span {
+  flex: 1;
+  word-break: break-word;
+}
+
+.toast-dismiss {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.toast-dismiss:hover {
+  opacity: 1;
 }
 
 /* ---------- QR card ---------- */

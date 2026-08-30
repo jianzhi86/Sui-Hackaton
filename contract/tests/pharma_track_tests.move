@@ -1,7 +1,7 @@
 #[test_only]
 module pharma_track::batch_tests;
 
-use pharma_track::batch::{Self, AdminCap, Batch, RegulatorRegistry, Unit};
+use pharma_track::batch::{Self, AdminCap, Batch, ManufacturerRegistry, RegulatorRegistry, Unit};
 use std::option;
 use std::string;
 use sui::clock;
@@ -14,27 +14,44 @@ const DISTRIBUTOR: address = @0xB0B;
 const PHARMACY: address = @0xCAFE;
 const CUSTOMER: address = @0xD00D;
 
+/// Far enough out that no test's clock manipulation will accidentally
+/// cross it — used everywhere a test doesn't care about expiry itself.
+const FAR_FUTURE_MS: u64 = 4_102_444_800_000; // year 2100
+
+/// Runs `init` (creating + sharing both registries and minting the
+/// `AdminCap` to MANUFACTURER, as if MANUFACTURER were the package
+/// deployer), then registers one batch via the just-shared
+/// `ManufacturerRegistry`. Split across two transactions because a shared
+/// object created by `init` isn't visible to `take_shared` until the
+/// transaction that shared it has committed via `next_tx`.
+fun setup_batch(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>, expiry_ms: u64) {
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+    scenario.next_tx(MANUFACTURER);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(&registry, batch_code, b"Amoxicillin 500mg", expiry_ms, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+}
+
+/// `setup_batch` with a far-future expiry, for tests that aren't about
+/// expiry at all (most of the hold/sale tests).
+fun setup_batch_with_registry(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>) {
+    setup_batch(scenario, batch_code, FAR_FUTURE_MS);
+}
+
 #[test]
 fun test_create_batch_and_add_checkpoint() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch(&mut scenario, b"BATCH-2026-001", FAR_FUTURE_MS);
 
-    // Transaction 1: manufacturer registers a new batch. This shares the
-    // Batch object so later transactions from other addresses can reach it.
-    {
-        let ctx = scenario.ctx();
-        let clock = clock::create_for_testing(ctx);
-
-        batch::create_batch(
-            b"BATCH-2026-001",
-            b"Amoxicillin 500mg",
-            &clock,
-            ctx,
-        );
-
-        clock.destroy_for_testing();
-    };
-
-    // Transaction 2: a distributor scans the batch in at their warehouse.
+    // A distributor scans the batch in at their warehouse.
     scenario.next_tx(DISTRIBUTOR);
     {
         let mut shared_batch = scenario.take_shared<Batch>();
@@ -53,11 +70,12 @@ fun test_create_batch_and_add_checkpoint() {
         assert!(batch::checkpoint_count(&shared_batch) == 1, 0);
         assert!(batch::batch_code(&shared_batch) == string::utf8(b"BATCH-2026-001"), 1);
         assert!(batch::manufacturer(&shared_batch) == MANUFACTURER, 2);
+        assert!(batch::expiry_ms(&shared_batch) == FAR_FUTURE_MS, 3);
 
         let checkpoints = batch::checkpoints(&shared_batch);
         let first = checkpoints.borrow(0);
-        assert!(batch::checkpoint_actor(first) == DISTRIBUTOR, 3);
-        assert!(batch::checkpoint_role(first) == string::utf8(b"distributor"), 4);
+        assert!(batch::checkpoint_actor(first) == DISTRIBUTOR, 4);
+        assert!(batch::checkpoint_role(first) == string::utf8(b"distributor"), 5);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
@@ -73,23 +91,121 @@ fun test_create_batch_rejects_empty_code() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
     {
         let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+    scenario.next_tx(MANUFACTURER);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"", b"Amoxicillin 500mg", &clock, ctx);
+        batch::create_batch(&registry, b"", b"Amoxicillin 500mg", FAR_FUTURE_MS, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
     };
     scenario.end();
 }
 
-/// Sets up a batch plus a `RegulatorRegistry` (MANUFACTURER already listed,
-/// as if MANUFACTURER were the package deployer that `init` seeds the
-/// registry with) and an `AdminCap` owned by MANUFACTURER, so hold/release
-/// tests don't need to touch publish-time init flow directly.
-fun setup_batch_with_registry(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>) {
-    let ctx = scenario.ctx();
-    let clock = clock::create_for_testing(ctx);
-    batch::test_init(ctx);
-    batch::create_batch(batch_code, b"Amoxicillin 500mg", &clock, ctx);
-    clock.destroy_for_testing();
+// abort_code 20 == batch::ENotManufacturer. PHARMACY was never added to
+// the ManufacturerRegistry, so it can't register a batch even though the
+// registry object itself is shared and passable by anyone.
+#[test, expected_failure(abort_code = 20)]
+fun test_create_batch_rejects_non_manufacturer() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+    scenario.next_tx(PHARMACY);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(&registry, b"BATCH-2026-023", b"Amoxicillin 500mg", FAR_FUTURE_MS, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+    scenario.end();
+}
+
+// abort_code 23 == batch::EInvalidExpiry. A batch can't be born already expired.
+#[test, expected_failure(abort_code = 23)]
+fun test_create_batch_rejects_expiry_in_the_past() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+    scenario.next_tx(MANUFACTURER);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        // clock starts at 0 in tests; expiry 0 is not > now (0).
+        batch::create_batch(&registry, b"BATCH-2026-024", b"Amoxicillin 500mg", 0, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+    scenario.end();
+}
+
+#[test]
+fun test_admin_add_manufacturer_lets_new_holder_create_batch() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<ManufacturerRegistry>();
+        batch::admin_add_manufacturer(&admin, &mut registry, PHARMACY);
+        assert!(batch::is_manufacturer(&registry, PHARMACY), 0);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::create_batch(&registry, b"BATCH-2026-025", b"Paracetamol 500mg", FAR_FUTURE_MS, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        assert!(batch::manufacturer(&shared_batch) == PHARMACY, 1);
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_admin_revoke_manufacturer_blocks_further_batches() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin = scenario.take_from_sender<AdminCap>();
+        let mut registry = scenario.take_shared<ManufacturerRegistry>();
+        batch::admin_add_manufacturer(&admin, &mut registry, PHARMACY);
+        batch::admin_revoke_manufacturer(&admin, &mut registry, PHARMACY);
+        assert!(!batch::is_manufacturer(&registry, PHARMACY), 0);
+        scenario.return_to_sender(admin);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
 }
 
 #[test]
@@ -566,12 +682,7 @@ fun test_release_hold_rejects_empty_note() {
 #[test]
 fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    {
-        let ctx = scenario.ctx();
-        let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"BATCH-2026-007", b"Amoxicillin 500mg", &clock, ctx);
-        clock.destroy_for_testing();
-    };
+    setup_batch(&mut scenario, b"BATCH-2026-007", FAR_FUTURE_MS);
 
     // Pharmacy mints a single-use sale QR against the batch.
     scenario.next_tx(PHARMACY);
@@ -613,12 +724,7 @@ fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
 #[test, expected_failure(abort_code = 6)]
 fun test_purchase_and_burn_rejects_wrong_payment() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    {
-        let ctx = scenario.ctx();
-        let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"BATCH-2026-008", b"Amoxicillin 500mg", &clock, ctx);
-        clock.destroy_for_testing();
-    };
+    setup_batch(&mut scenario, b"BATCH-2026-008", FAR_FUTURE_MS);
 
     scenario.next_tx(PHARMACY);
     {
@@ -652,12 +758,7 @@ fun test_purchase_and_burn_rejects_wrong_payment() {
 #[test, expected_failure]
 fun test_purchase_and_burn_cannot_be_redeemed_twice() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    {
-        let ctx = scenario.ctx();
-        let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"BATCH-2026-009", b"Amoxicillin 500mg", &clock, ctx);
-        clock.destroy_for_testing();
-    };
+    setup_batch(&mut scenario, b"BATCH-2026-009", FAR_FUTURE_MS);
 
     scenario.next_tx(PHARMACY);
     {
@@ -695,12 +796,7 @@ fun test_purchase_and_burn_cannot_be_redeemed_twice() {
 #[test, expected_failure(abort_code = 7)]
 fun test_purchase_and_burn_rejects_expired_unit() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
-    {
-        let ctx = scenario.ctx();
-        let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"BATCH-2026-010", b"Amoxicillin 500mg", &clock, ctx);
-        clock.destroy_for_testing();
-    };
+    setup_batch(&mut scenario, b"BATCH-2026-010", FAR_FUTURE_MS);
 
     scenario.next_tx(PHARMACY);
     {
@@ -825,6 +921,62 @@ fun test_purchase_and_burn_rejects_batch_held_after_mint() {
     scenario.end();
 }
 
+// abort_code 24 == batch::EBatchExpired. A batch past its expiry can't
+// have a new sale QR minted against it.
+#[test, expected_failure(abort_code = 24)]
+fun test_mint_unit_rejects_expired_batch() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch(&mut scenario, b"BATCH-2026-026", 1_000);
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(1_001); // past the batch's expiry_ms of 1_000
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 24 == batch::EBatchExpired. A `Unit` minted *before* the
+// batch expired still can't be redeemed once expiry has passed — the
+// check at purchase time matters just as much as the one at mint time,
+// mirroring how the hold checks work.
+#[test, expected_failure(abort_code = 24)]
+fun test_purchase_and_burn_rejects_batch_expired_after_mint() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch(&mut scenario, b"BATCH-2026-027", 10_000);
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx); // clock at 0, well before expiry
+        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(10_001); // past expiry, still within the Unit's own 10-min window
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
 // abort_code 11 == batch::EUnitBatchMismatch.
 //
 // Creates batch A, mints a Unit against it (which touches/returns A,
@@ -838,9 +990,17 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
     {
         let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
+        let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"BATCH-2026-016A", b"Amoxicillin 500mg", &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-016A", b"Amoxicillin 500mg", FAR_FUTURE_MS, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
     };
 
     scenario.next_tx(PHARMACY);
@@ -857,10 +1017,12 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
     // touched, so it's now unambiguously the "most recent" Batch.
     scenario.next_tx(MANUFACTURER);
     {
+        let registry = scenario.take_shared<ManufacturerRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::create_batch(b"BATCH-2026-016B", b"Paracetamol 500mg", &clock, ctx);
+        batch::create_batch(&registry, b"BATCH-2026-016B", b"Paracetamol 500mg", FAR_FUTURE_MS, &clock, ctx);
         clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
     };
 
     // Try to redeem the Unit (minted against A) against B instead.
