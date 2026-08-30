@@ -24,9 +24,11 @@
 /// not a bearer capability object: a capability object (like the earlier
 /// version of this module used) can never be taken back once handed out —
 /// whoever holds it holds it forever, even after they leave the job or the
-/// key leaks. An allow-list can be revoked. One `AdminCap` is minted to the
-/// package deployer at publish time; only that holder can add or revoke
-/// regulator addresses via `admin_add_regulator` / `admin_revoke_regulator`.
+/// key leaks. An allow-list can be revoked. The deployer is seeded as the
+/// sole member of a shared `AdminRegistry` at publish time; any listed
+/// admin can add or revoke regulator addresses via `admin_add_regulator` /
+/// `admin_revoke_regulator`, and can add a backup admin via
+/// `admin_add_admin` before ever needing one.
 ///
 /// A hold carries a `severity` classification (`SEVERITY_*`), a `category`
 /// classification (`CATEGORY_*`), a mandatory `case_reference` for
@@ -149,6 +151,12 @@ public struct HoldRecord has copy, drop, store {
     /// *proposed* the release, distinct from `released_by` (the address
     /// that *confirmed* it). `none` for single-signer releases.
     co_released_by: Option<address>,
+    /// Whether this hold cycle was ever flagged by `escalate_stale_hold` as
+    /// having sat unaddressed past its review window, before it was
+    /// eventually released. Permanent once set — unlike `Batch.hold_escalated`,
+    /// this doesn't get reset, since it's a fact about how this particular
+    /// cycle played out, not the current state.
+    escalated: bool,
 }
 
 /// On-chain record for one drug batch.
@@ -181,16 +189,24 @@ public struct Batch has key {
     /// otherwise, including for non-critical holds (which never use this).
     pending_release_by: Option<address>,
     pending_release_note: Option<String>,
+    /// Whether the currently-active hold has been flagged, via
+    /// `escalate_stale_hold`, as having sat unaddressed past its
+    /// severity-scaled review window. Reset to `false` whenever a new hold
+    /// is placed or the current one is released.
+    hold_escalated: bool,
 }
 
-/// Capability held by whoever can add/revoke regulator addresses in a
-/// `RegulatorRegistry`. Minted once to the deployer at publish time.
-/// Unlike the registry membership it controls, this itself is a bearer
-/// capability with no revocation path — a real deployment would want a
-/// multisig or a second `AdminCap` holder as a backup, since losing this
-/// object means nobody can ever change the regulator list again.
-public struct AdminCap has key, store {
+/// Shared allow-list of addresses that can manage the regulator and
+/// manufacturer registries. Replaces an earlier single bearer `AdminCap`
+/// object: losing that object (or it leaking) would have permanently
+/// locked out every future admin action, with no way to recover. An
+/// allow-list lets a backup admin be seeded ahead of time via
+/// `admin_add_admin`, and `admin_remove_admin` refuses to remove the last
+/// remaining admin (`ECannotRemoveLastAdmin`) so this can't be emptied
+/// into the same unrecoverable state it replaces.
+public struct AdminRegistry has key {
     id: UID,
+    admins: VecSet<address>,
 }
 
 /// The shared allow-list of addresses that can place/release holds.
@@ -239,7 +255,10 @@ public struct Unit has key {
 
 fun init(ctx: &mut TxContext) {
     let sender = ctx.sender();
-    transfer::transfer(AdminCap { id: object::new(ctx) }, sender);
+
+    let mut admins = vec_set::empty<address>();
+    admins.insert(sender);
+    transfer::share_object(AdminRegistry { id: object::new(ctx), admins });
 
     let mut regulators = vec_set::empty<address>();
     regulators.insert(sender);
@@ -302,6 +321,18 @@ public struct ReleaseProposed has copy, drop {
     proposed_at_ms: u64,
 }
 
+/// Emitted by `escalate_stale_hold` — a permanent, on-chain record that a
+/// hold sat past its severity-scaled review window without being
+/// addressed. Doesn't change `is_held`; it's a visibility escalation, not
+/// an automatic release.
+public struct HoldEscalated has copy, drop {
+    batch_id: address,
+    severity: u8,
+    held_by: address,
+    held_at_ms: u64,
+    escalated_at_ms: u64,
+}
+
 public struct BatchReleased has copy, drop {
     batch_id: address,
     released_by: address,
@@ -359,6 +390,12 @@ const EInvalidExpiry: u64 = 23;
 const EBatchExpired: u64 = 24;
 const EInvalidSecretHash: u64 = 25;
 const ESecretMismatch: u64 = 26;
+const ENotAdmin: u64 = 27;
+const EAlreadyAdmin: u64 = 28;
+const ENotCurrentAdmin: u64 = 29;
+const ECannotRemoveLastAdmin: u64 = 30;
+const EHoldAlreadyEscalated: u64 = 31;
+const EHoldNotYetOverdue: u64 = 32;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -405,6 +442,18 @@ const TEMPERATURE_OFFSET_C: u64 = 200;
 /// correctly.
 const SECRET_HASH_LENGTH: u64 = 32;
 
+/// How long a hold of each severity can sit unaddressed before
+/// `escalate_stale_hold` will accept flagging it as overdue — 1 day for
+/// Critical, 7 for Recall, 30 for Advisory, mirroring the urgency ordering
+/// severity itself encodes. Purely a review deadline, not an auto-release:
+/// an overdue hold stays in effect (still blocks sales) exactly as before,
+/// this only makes "nobody has looked at this in a while" a permanent,
+/// on-chain, publicly-queryable fact instead of something only a UI badge
+/// computed against wall-clock time could show.
+const CRITICAL_REVIEW_MS: u64 = 86_400_000;
+const RECALL_REVIEW_MS: u64 = 604_800_000;
+const ADVISORY_REVIEW_MS: u64 = 2_592_000_000;
+
 // ===== Entry functions =====
 
 /// Create a new batch and share it immediately so every later party in the
@@ -447,6 +496,7 @@ public entry fun create_batch(
         hold_history: vector::empty<HoldRecord>(),
         pending_release_by: option::none(),
         pending_release_note: option::none(),
+        hold_escalated: false,
     };
 
     event::emit(BatchCreated {
@@ -651,6 +701,7 @@ public entry fun place_hold(
     batch.hold_case_reference = string::utf8(case_reference);
     batch.held_by = sender;
     batch.held_at_ms = now;
+    batch.hold_escalated = false;
 
     batch.hold_history.push_back(HoldRecord {
         held_by: sender,
@@ -663,6 +714,7 @@ public entry fun place_hold(
         released_at_ms: option::none(),
         release_note: option::none(),
         co_released_by: option::none(),
+        escalated: false,
     });
 
     event::emit(BatchHeld {
@@ -762,6 +814,44 @@ public entry fun confirm_release(
     finish_release(batch, sender, note, option::some(proposer), now);
 }
 
+/// Flag the currently-active hold as overdue for review, once it has sat
+/// unaddressed past its severity-scaled window (`CRITICAL_REVIEW_MS` /
+/// `RECALL_REVIEW_MS` / `ADVISORY_REVIEW_MS`). Callable by anyone, same
+/// trust model as `add_checkpoint`: this only turns an already-public,
+/// independently-computable fact ("this hold has been open longer than
+/// its review window") into a permanent on-chain record and event,
+/// rather than leaving it as a client-side badge that only shows up if
+/// someone happens to load the page. Does not release the hold or change
+/// what it blocks — a stale hold stays exactly as blocking as before,
+/// just now flagged as overdue.
+public entry fun escalate_stale_hold(batch: &mut Batch, clock: &Clock) {
+    assert!(batch.is_held, EBatchNotHeld);
+    assert!(!batch.hold_escalated, EHoldAlreadyEscalated);
+
+    let now = clock.timestamp_ms();
+    let threshold = if (batch.hold_severity == SEVERITY_CRITICAL) {
+        CRITICAL_REVIEW_MS
+    } else if (batch.hold_severity == SEVERITY_RECALL) {
+        RECALL_REVIEW_MS
+    } else {
+        ADVISORY_REVIEW_MS
+    };
+    assert!(now - batch.held_at_ms >= threshold, EHoldNotYetOverdue);
+
+    batch.hold_escalated = true;
+    let last_index = batch.hold_history.length() - 1;
+    let last_record = batch.hold_history.borrow_mut(last_index);
+    last_record.escalated = true;
+
+    event::emit(HoldEscalated {
+        batch_id: object::uid_to_address(&batch.id),
+        severity: batch.hold_severity,
+        held_by: batch.held_by,
+        held_at_ms: batch.held_at_ms,
+        escalated_at_ms: now,
+    });
+}
+
 /// Shared tail end of releasing a hold — resets the batch's "current
 /// hold" fields, closes out the last `hold_history` entry, and emits
 /// `BatchReleased`. Used by both the single-signer and two-signer paths
@@ -780,6 +870,7 @@ fun finish_release(
     batch.hold_case_reference = string::utf8(b"");
     batch.held_by = @0x0;
     batch.held_at_ms = 0;
+    batch.hold_escalated = false;
 
     let last_index = batch.hold_history.length() - 1;
     let last_record = batch.hold_history.borrow_mut(last_index);
@@ -798,13 +889,15 @@ fun finish_release(
 }
 
 /// Onboard another regulator by adding their address to the registry.
-/// Only the `AdminCap` holder can do this — trust chains back to the
-/// original deployer, there is no way to self-add to the registry.
+/// Caller must be a listed admin in `AdminRegistry` — trust chains back to
+/// an existing admin, there is no way to self-add to the registry.
 public entry fun admin_add_regulator(
-    _admin: &AdminCap,
+    admin_registry: &AdminRegistry,
     registry: &mut RegulatorRegistry,
     addr: address,
+    ctx: &TxContext,
 ) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
     assert!(!registry.regulators.contains(&addr), EAlreadyRegulator);
     registry.regulators.insert(addr);
 }
@@ -815,22 +908,26 @@ public entry fun admin_add_regulator(
 /// can actually be cut off, not just superseded by minting more caps
 /// while the old one remains forever valid.
 public entry fun admin_revoke_regulator(
-    _admin: &AdminCap,
+    admin_registry: &AdminRegistry,
     registry: &mut RegulatorRegistry,
     addr: address,
+    ctx: &TxContext,
 ) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
     assert!(registry.regulators.contains(&addr), ENotCurrentRegulator);
     registry.regulators.remove(&addr);
 }
 
 /// Onboard a manufacturer by adding their address to `ManufacturerRegistry`.
-/// Same `AdminCap` as the regulator registry — one admin role governs both
-/// allow-lists in this MVP.
+/// Same `AdminRegistry` as the regulator registry — one admin role governs
+/// both allow-lists in this MVP.
 public entry fun admin_add_manufacturer(
-    _admin: &AdminCap,
+    admin_registry: &AdminRegistry,
     registry: &mut ManufacturerRegistry,
     addr: address,
+    ctx: &TxContext,
 ) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
     assert!(!registry.manufacturers.contains(&addr), EAlreadyManufacturer);
     registry.manufacturers.insert(addr);
 }
@@ -840,12 +937,44 @@ public entry fun admin_add_manufacturer(
 /// future `create_batch` calls, the same way revoking a regulator doesn't
 /// undo holds they already placed.
 public entry fun admin_revoke_manufacturer(
-    _admin: &AdminCap,
+    admin_registry: &AdminRegistry,
     registry: &mut ManufacturerRegistry,
     addr: address,
+    ctx: &TxContext,
 ) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
     assert!(registry.manufacturers.contains(&addr), ENotCurrentManufacturer);
     registry.manufacturers.remove(&addr);
+}
+
+/// Add a backup/additional admin to `AdminRegistry`. Caller must already
+/// be a listed admin — same trust-chains-back-to-an-existing-member
+/// pattern as onboarding a regulator or manufacturer. Seeding a second
+/// admin right after publish is exactly what closes the single-point-of-
+/// failure gap a lone bearer `AdminCap` used to have.
+public entry fun admin_add_admin(
+    admin_registry: &mut AdminRegistry,
+    addr: address,
+    ctx: &TxContext,
+) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(!admin_registry.admins.contains(&addr), EAlreadyAdmin);
+    admin_registry.admins.insert(addr);
+}
+
+/// Remove an admin (including, if desired, the caller themselves).
+/// Refuses to remove the very last remaining admin — doing so would
+/// recreate exactly the unrecoverable lockout this allow-list design
+/// exists to avoid, just with an empty set instead of a lost object.
+public entry fun admin_remove_admin(
+    admin_registry: &mut AdminRegistry,
+    addr: address,
+    ctx: &TxContext,
+) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.contains(&addr), ENotCurrentAdmin);
+    assert!(admin_registry.admins.length() > 1, ECannotRemoveLastAdmin);
+    admin_registry.admins.remove(&addr);
 }
 
 // ===== Read-only accessors =====
@@ -905,6 +1034,8 @@ public fun held_at_ms(batch: &Batch): u64 { batch.held_at_ms }
 
 public fun hold_history(batch: &Batch): &vector<HoldRecord> { &batch.hold_history }
 
+public fun hold_escalated(batch: &Batch): bool { batch.hold_escalated }
+
 public fun hold_record_held_by(r: &HoldRecord): address { r.held_by }
 
 public fun hold_record_reason(r: &HoldRecord): String { r.reason }
@@ -926,6 +1057,16 @@ public fun hold_record_released_at_ms(r: &HoldRecord): Option<u64> { r.released_
 public fun hold_record_release_note(r: &HoldRecord): Option<String> { r.release_note }
 
 public fun hold_record_co_released_by(r: &HoldRecord): Option<address> { r.co_released_by }
+
+public fun hold_record_escalated(r: &HoldRecord): bool { r.escalated }
+
+/// Review-window thresholds (ms) used by `escalate_stale_hold`, exposed so
+/// callers (tests, the frontend) don't have to hardcode them.
+public fun critical_review_ms(): u64 { CRITICAL_REVIEW_MS }
+
+public fun recall_review_ms(): u64 { RECALL_REVIEW_MS }
+
+public fun advisory_review_ms(): u64 { ADVISORY_REVIEW_MS }
 
 /// The address that proposed releasing the currently-active critical
 /// hold, while `confirm_release` is still pending. `none` if there's no
@@ -953,6 +1094,16 @@ public fun category_labeling_error(): u8 { CATEGORY_LABELING_ERROR }
 public fun category_cold_chain_breach(): u8 { CATEGORY_COLD_CHAIN_BREACH }
 
 public fun category_other(): u8 { CATEGORY_OTHER }
+
+public fun is_admin(registry: &AdminRegistry, addr: address): bool {
+    registry.admins.contains(&addr)
+}
+
+/// All currently-listed admin addresses — lets an admin UI show who has
+/// access right now without needing to replay every add/remove event.
+public fun admins(registry: &AdminRegistry): vector<address> {
+    *registry.admins.keys()
+}
 
 public fun is_regulator(registry: &RegulatorRegistry, addr: address): bool {
     registry.regulators.contains(&addr)

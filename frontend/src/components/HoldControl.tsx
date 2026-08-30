@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, REGISTRY_OBJECT_ID, target } from '../lib/network';
+import { ADMIN_REGISTRY_OBJECT_ID, CLOCK_OBJECT_ID, DEFAULT_NETWORK, REGISTRY_OBJECT_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
-import { useAdminCap, useIsListed } from '../lib/registry';
+import { useIsListed } from '../lib/registry';
 import { useToast } from '../lib/toast';
 import { CodeChip } from './CodeChip';
 import { RegistryAdminPanel } from './RegistryAdminPanel';
@@ -70,11 +70,32 @@ function formatDuration(ms: number): string {
   return `${hours} hour${hours === 1 ? '' : 's'}`;
 }
 
-function StaleHoldBadge({ heldAtMs, severity }: { heldAtMs: number; severity: HoldSeverity }) {
+function StaleHoldBadge({
+  heldAtMs,
+  severity,
+  escalated,
+}: {
+  heldAtMs: number;
+  severity: HoldSeverity;
+  escalated: boolean;
+}) {
   const age = Date.now() - heldAtMs;
+  if (escalated) {
+    return (
+      <span
+        className="severity-badge severity-critical"
+        title="Recorded on-chain via escalate_stale_hold — a permanent, public fact, not just a client-side badge."
+      >
+        🚨 Escalated — overdue for review ({formatDuration(age)} since held)
+      </span>
+    );
+  }
   if (age < STALE_THRESHOLD_MS[severity]) return null;
   return (
-    <span className="severity-badge severity-critical" title="No on-chain deadline enforces this — it's a UI nudge only.">
+    <span
+      className="severity-badge severity-critical"
+      title="Not yet recorded on-chain — anyone can flag it below."
+    >
       ⏰ Overdue for review ({formatDuration(age)} since held)
     </span>
   );
@@ -95,7 +116,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
   const { isListed: isRegulator, isLoading: regLoading } = useIsListed(REGISTRY_OBJECT_ID, 'regulators');
-  const { adminCapId, refetch: refetchAdmin } = useAdminCap();
+  const { isListed: isAdmin, refetch: refetchAdmin } = useIsListed(ADMIN_REGISTRY_OBJECT_ID, 'admins');
   const [reason, setReason] = useState('');
   const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_RECALL);
   const [category, setCategory] = useState<HoldCategory>(CATEGORY_QUALITY_DEFECT);
@@ -236,9 +257,32 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     );
   }
 
+  function handleEscalate() {
+    setError(null);
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: target('escalate_stale_hold'),
+      arguments: [tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
+    });
+
+    signAndExecute(
+      { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
+      {
+        onSuccess: () => {
+          toast.success('Hold flagged as overdue for review — recorded on-chain, permanently.');
+          onChanged();
+        },
+        onError: (err) => toast.error(err.message),
+      },
+    );
+  }
+
   const canAct = Boolean(account && isRegulator && !regLoading);
   const isCritical = batch.holdSeverity === SEVERITY_CRITICAL;
   const isProposer = Boolean(account && batch.pendingReleaseBy === account.address);
+  const isOverdue =
+    batch.isHeld && Date.now() - batch.heldAtMs >= STALE_THRESHOLD_MS[batch.holdSeverity as HoldSeverity];
 
   return (
     <>
@@ -246,7 +290,22 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
         <div className="hold-banner hold-banner-active">
           <strong>⚠ ON HOLD</strong> <SeverityBadge severity={batch.holdSeverity as HoldSeverity} />{' '}
           <CategoryBadge category={batch.holdCategory as HoldCategory} />{' '}
-          <StaleHoldBadge heldAtMs={batch.heldAtMs} severity={batch.holdSeverity as HoldSeverity} />
+          <StaleHoldBadge
+            heldAtMs={batch.heldAtMs}
+            severity={batch.holdSeverity as HoldSeverity}
+            escalated={batch.holdEscalated}
+          />{' '}
+          {isOverdue && !batch.holdEscalated && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleEscalate}
+              disabled={!account || isPending}
+              title="Anyone can call this — it only records an already-public fact (this hold has passed its review window) on-chain."
+            >
+              {isPending ? 'Flagging…' : 'Flag as overdue (on-chain)'}
+            </button>
+          )}
           <p>
             Reason: "{batch.holdReason}" — case <span className="code-chip">{batch.holdCaseReference}</span>{' '}
             — placed by <CodeChip value={batch.heldBy} href={explorerAddressUrl(batch.heldBy)} /> at{' '}
@@ -439,9 +498,9 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
               </p>
             )}
           </form>
-          {adminCapId && (
+          {isAdmin && (
             <RegistryAdminPanel
-              adminCapId={adminCapId}
+              adminRegistryId={ADMIN_REGISTRY_OBJECT_ID}
               registryObjectId={REGISTRY_OBJECT_ID}
               addFn="admin_add_regulator"
               revokeFn="admin_revoke_regulator"

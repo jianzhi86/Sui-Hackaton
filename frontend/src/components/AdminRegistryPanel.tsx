@@ -1,46 +1,30 @@
 import { useState, type FormEvent } from 'react';
 import { Transaction } from '@mysten/sui/transactions';
-import { DEFAULT_NETWORK, target } from '../lib/network';
+import { ADMIN_REGISTRY_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
 
-interface RegistryAdminPanelProps {
-  adminRegistryId: string;
-  registryObjectId: string;
-  /** Move entry function name that adds an address, e.g. "admin_add_regulator". */
-  addFn: string;
-  /** Move entry function name that removes an address, e.g. "admin_revoke_regulator". */
-  revokeFn: string;
-  /** Human label for what this allow-list controls, e.g. "regulator" or "manufacturer". */
-  roleLabel: string;
+interface AdminRegistryPanelProps {
   onChanged: () => void;
 }
 
 /**
- * Generic add/revoke UI for an `AdminRegistry`-controlled address
- * allow-list. Shared by the regulator and manufacturer registries — both
- * are the same `VecSet<address>` shape in Move, gated by the same
- * `AdminRegistry`, so one component covers both instead of duplicating
- * the form twice.
+ * Add/remove UI for `AdminRegistry` itself — seeding a backup admin, or
+ * removing one. Separate from `RegistryAdminPanel` because `admin_add_admin`
+ * / `admin_remove_admin` take a single mutable `AdminRegistry` reference,
+ * not an admin-registry-plus-target-registry pair like the regulator/
+ * manufacturer admin actions do.
  */
-export function RegistryAdminPanel({
-  adminRegistryId,
-  registryObjectId,
-  addFn,
-  revokeFn,
-  roleLabel,
-  onChanged,
-}: RegistryAdminPanelProps) {
+export function AdminRegistryPanel({ onChanged }: AdminRegistryPanelProps) {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
   const [addAddress, setAddAddress] = useState('');
-  const [revokeAddress, setRevokeAddress] = useState('');
+  const [removeAddress, setRemoveAddress] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   function handleAdd(e: FormEvent) {
     e.preventDefault();
     setError(null);
-
     if (!addAddress.trim()) {
       setError('An address is required.');
       return;
@@ -48,15 +32,15 @@ export function RegistryAdminPanel({
 
     const tx = new Transaction();
     tx.moveCall({
-      target: target(addFn),
-      arguments: [tx.object(adminRegistryId), tx.object(registryObjectId), tx.pure.address(addAddress.trim())],
+      target: target('admin_add_admin'),
+      arguments: [tx.object(ADMIN_REGISTRY_OBJECT_ID), tx.pure.address(addAddress.trim())],
     });
 
     signAndExecute(
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
         onSuccess: () => {
-          toast.success(`${addAddress.trim()} added as a ${roleLabel}.`);
+          toast.success(`${addAddress.trim()} added as a backup admin.`);
           setAddAddress('');
           onChanged();
         },
@@ -65,27 +49,26 @@ export function RegistryAdminPanel({
     );
   }
 
-  function handleRevoke(e: FormEvent) {
+  function handleRemove(e: FormEvent) {
     e.preventDefault();
     setError(null);
-
-    if (!revokeAddress.trim()) {
+    if (!removeAddress.trim()) {
       setError('An address is required.');
       return;
     }
 
     const tx = new Transaction();
     tx.moveCall({
-      target: target(revokeFn),
-      arguments: [tx.object(adminRegistryId), tx.object(registryObjectId), tx.pure.address(revokeAddress.trim())],
+      target: target('admin_remove_admin'),
+      arguments: [tx.object(ADMIN_REGISTRY_OBJECT_ID), tx.pure.address(removeAddress.trim())],
     });
 
     signAndExecute(
       { transaction: tx, chain: `sui:${DEFAULT_NETWORK}` as `sui:${string}` },
       {
         onSuccess: () => {
-          toast.success(`${revokeAddress.trim()} revoked as a ${roleLabel}.`);
-          setRevokeAddress('');
+          toast.success(`${removeAddress.trim()} removed as admin.`);
+          setRemoveAddress('');
           onChanged();
         },
         onError: (err) => toast.error(err.message),
@@ -96,14 +79,19 @@ export function RegistryAdminPanel({
   return (
     <details style={{ marginTop: 12 }}>
       <summary className="helper-text" style={{ cursor: 'pointer' }}>
-        Admin: manage {roleLabel} access
+        Admin: manage admin access
       </summary>
       <div style={{ marginTop: 8 }}>
+        <p className="helper-text">
+          Add a backup admin before you ever need one — the last remaining admin can't be removed,
+          so a registry with only you in it is one lost key away from nobody ever being able to
+          change either allow-list again.
+        </p>
         <form onSubmit={handleAdd}>
           <div className="field">
-            <label htmlFor={`add-${roleLabel}`}>Add {roleLabel} address</label>
+            <label htmlFor="add-admin">Add admin address</label>
             <input
-              id={`add-${roleLabel}`}
+              id="add-admin"
               value={addAddress}
               onChange={(e) => setAddAddress(e.target.value)}
               placeholder="0x…"
@@ -111,23 +99,23 @@ export function RegistryAdminPanel({
             />
           </div>
           <button type="submit" className="btn btn-secondary" disabled={isPending}>
-            {isPending ? 'Adding…' : `Add ${roleLabel}`}
+            {isPending ? 'Adding…' : 'Add admin'}
           </button>
         </form>
 
-        <form onSubmit={handleRevoke} style={{ marginTop: 12 }}>
+        <form onSubmit={handleRemove} style={{ marginTop: 12 }}>
           <div className="field">
-            <label htmlFor={`revoke-${roleLabel}`}>Revoke {roleLabel} address</label>
+            <label htmlFor="remove-admin">Remove admin address</label>
             <input
-              id={`revoke-${roleLabel}`}
-              value={revokeAddress}
-              onChange={(e) => setRevokeAddress(e.target.value)}
+              id="remove-admin"
+              value={removeAddress}
+              onChange={(e) => setRemoveAddress(e.target.value)}
               placeholder="0x…"
               disabled={isPending}
             />
           </div>
           <button type="submit" className="btn btn-danger" disabled={isPending}>
-            {isPending ? 'Revoking…' : `Revoke ${roleLabel}`}
+            {isPending ? 'Removing…' : 'Remove admin'}
           </button>
         </form>
 

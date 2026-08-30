@@ -65,6 +65,12 @@ a:focus-visible {
   padding: 20px 20px 64px;
 }
 
+@media (max-width: 640px) {
+  .app-shell {
+    padding: 12px 12px 48px;
+  }
+}
+
 /* ---------- Header ---------- */
 
 .app-header {
@@ -118,6 +124,9 @@ a:focus-visible {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .tab-button {
@@ -132,6 +141,28 @@ a:focus-visible {
   cursor: pointer;
   color: var(--ink-soft);
   transition: background-color 120ms ease, color 120ms ease;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .brand {
+    margin-right: 0;
+  }
+
+  .tab-rail {
+    width: 100%;
+  }
+
+  .app-header > button {
+    align-self: flex-start;
+  }
 }
 
 .tab-button:hover {
@@ -163,6 +194,12 @@ a:focus-visible {
   border-radius: 6px;
   padding: 24px;
   margin-bottom: 20px;
+}
+
+@media (max-width: 640px) {
+  .panel {
+    padding: 16px;
+  }
 }
 
 .panel h2 {

@@ -1,14 +1,21 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, MANUFACTURER_REGISTRY_OBJECT_ID, target } from '../lib/network';
+import {
+  ADMIN_REGISTRY_OBJECT_ID,
+  CLOCK_OBJECT_ID,
+  DEFAULT_NETWORK,
+  MANUFACTURER_REGISTRY_OBJECT_ID,
+  target,
+} from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
-import { useAdminCap, useIsListed } from '../lib/registry';
+import { useIsListed } from '../lib/registry';
 import { useToast } from '../lib/toast';
 import { QrCodeCard } from './QrCodeCard';
 import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
 import { RegistryAdminPanel } from './RegistryAdminPanel';
+import { AdminRegistryPanel } from './AdminRegistryPanel';
 import { explorerTxUrl } from '../lib/explorer';
 
 interface CreatedObjectChange {
@@ -34,7 +41,7 @@ export function RegisterBatchForm() {
     MANUFACTURER_REGISTRY_OBJECT_ID,
     'manufacturers',
   );
-  const { adminCapId, refetch: refetchAdmin } = useAdminCap();
+  const { isListed: isAdmin, refetch: refetchAdmin } = useIsListed(ADMIN_REGISTRY_OBJECT_ID, 'admins');
 
   const [batchCode, setBatchCode] = useState('');
   const [productName, setProductName] = useState('');
@@ -159,9 +166,9 @@ export function RegisterBatchForm() {
         </button>
       </form>
 
-      {adminCapId && (
+      {isAdmin && (
         <RegistryAdminPanel
-          adminCapId={adminCapId}
+          adminRegistryId={ADMIN_REGISTRY_OBJECT_ID}
           registryObjectId={MANUFACTURER_REGISTRY_OBJECT_ID}
           addFn="admin_add_manufacturer"
           revokeFn="admin_revoke_manufacturer"
@@ -169,6 +176,7 @@ export function RegisterBatchForm() {
           onChanged={refetchAdmin}
         />
       )}
+      {isAdmin && <AdminRegistryPanel onChanged={refetchAdmin} />}
 
       {createdBatchId && verifyUrl && (
         <div style={{ marginTop: 24 }}>

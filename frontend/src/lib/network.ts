@@ -51,6 +51,17 @@ export const REGISTRY_OBJECT_ID = import.meta.env.VITE_REGISTRY_OBJECT_ID || '0x
 export const MANUFACTURER_REGISTRY_OBJECT_ID =
   import.meta.env.VITE_MANUFACTURER_REGISTRY_OBJECT_ID || '0x0';
 
+/**
+ * Object ID of the shared `AdminRegistry`, created once at publish time
+ * alongside the other two registries. Replaces an earlier bearer
+ * `AdminCap` object — membership here is checked by address like the
+ * regulator/manufacturer registries, not by owning an object, so it needs
+ * its own object ID the same way they do. Copy it from the same publish
+ * output ("Created Objects" — the one with type `...::batch::AdminRegistry`)
+ * into `.env` as `VITE_ADMIN_REGISTRY_OBJECT_ID`.
+ */
+export const ADMIN_REGISTRY_OBJECT_ID = import.meta.env.VITE_ADMIN_REGISTRY_OBJECT_ID || '0x0';
+
 export const MODULE_NAME = 'batch';
 
 /** Sui's shared Clock object always lives at this fixed address. */

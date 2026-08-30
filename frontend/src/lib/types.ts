@@ -36,6 +36,10 @@ export interface HoldRecord {
   /** Set only when released via the two-signer critical path — the address
    * that proposed the release, distinct from `releasedBy` (who confirmed it). */
   coReleasedBy: string | null;
+  /** Whether this hold cycle was ever flagged via `escalate_stale_hold` as
+   * having sat unaddressed past its review window, before it was eventually
+   * released (or, if still active, so far). Permanent once set. */
+  escalated: boolean;
 }
 
 export interface BatchRecord {
@@ -59,6 +63,10 @@ export interface BatchRecord {
    * second regulator's confirmation is still pending. `null` otherwise. */
   pendingReleaseBy: string | null;
   pendingReleaseNote: string | null;
+  /** Whether the currently-active hold has been flagged, on-chain via
+   * `escalate_stale_hold`, as overdue for review. `false` when there's no
+   * active hold, or an active one just hasn't been flagged (yet). */
+  holdEscalated: boolean;
 }
 
 export interface UnitRecord {

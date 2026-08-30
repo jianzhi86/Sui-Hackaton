@@ -1,7 +1,7 @@
 #[test_only]
 module pharma_track::batch_tests;
 
-use pharma_track::batch::{Self, AdminCap, Batch, ManufacturerRegistry, RegulatorRegistry, Unit};
+use pharma_track::batch::{Self, AdminRegistry, Batch, ManufacturerRegistry, RegulatorRegistry, Unit};
 use std::hash;
 use std::option;
 use std::string;
@@ -24,9 +24,9 @@ const FAR_FUTURE_MS: u64 = 4_102_444_800_000; // year 2100
 /// the secret-mismatch behavior.
 const TEST_SECRET: vector<u8> = b"scratch-code-1234";
 
-/// Runs `init` (creating + sharing both registries and minting the
-/// `AdminCap` to MANUFACTURER, as if MANUFACTURER were the package
-/// deployer), then registers one batch via the just-shared
+/// Runs `init` (creating + sharing both registries plus `AdminRegistry`,
+/// seeding MANUFACTURER as its sole admin, as if MANUFACTURER were the
+/// package deployer), then registers one batch via the just-shared
 /// `ManufacturerRegistry`. Split across two transactions because a shared
 /// object created by `init` isn't visible to `take_shared` until the
 /// transaction that shared it has committed via `next_tx`.
@@ -170,11 +170,12 @@ fun test_admin_add_manufacturer_lets_new_holder_create_batch() {
 
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<ManufacturerRegistry>();
-        batch::admin_add_manufacturer(&admin, &mut registry, PHARMACY);
+        let ctx = scenario.ctx();
+        batch::admin_add_manufacturer(&admin_registry, &mut registry, PHARMACY, ctx);
         assert!(batch::is_manufacturer(&registry, PHARMACY), 0);
-        scenario.return_to_sender(admin);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -208,12 +209,13 @@ fun test_admin_revoke_manufacturer_blocks_further_batches() {
 
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<ManufacturerRegistry>();
-        batch::admin_add_manufacturer(&admin, &mut registry, PHARMACY);
-        batch::admin_revoke_manufacturer(&admin, &mut registry, PHARMACY);
+        let ctx = scenario.ctx();
+        batch::admin_add_manufacturer(&admin_registry, &mut registry, PHARMACY, ctx);
+        batch::admin_revoke_manufacturer(&admin_registry, &mut registry, PHARMACY, ctx);
         assert!(!batch::is_manufacturer(&registry, PHARMACY), 0);
-        scenario.return_to_sender(admin);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -370,14 +372,15 @@ fun test_admin_add_regulator_lets_new_holder_place_hold() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
     setup_batch_with_registry(&mut scenario, b"BATCH-2026-005");
 
-    // MANUFACTURER (holding the AdminCap) onboards PHARMACY as a regulator.
+    // MANUFACTURER (a listed admin) onboards PHARMACY as a regulator.
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<RegulatorRegistry>();
-        batch::admin_add_regulator(&admin, &mut registry, PHARMACY);
+        let ctx = scenario.ctx();
+        batch::admin_add_regulator(&admin_registry, &mut registry, PHARMACY, ctx);
         assert!(batch::is_regulator(&registry, PHARMACY), 0);
-        scenario.return_to_sender(admin);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -417,12 +420,13 @@ fun test_admin_revoke_regulator_blocks_further_holds() {
 
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<RegulatorRegistry>();
-        batch::admin_add_regulator(&admin, &mut registry, PHARMACY);
-        batch::admin_revoke_regulator(&admin, &mut registry, PHARMACY);
+        let ctx = scenario.ctx();
+        batch::admin_add_regulator(&admin_registry, &mut registry, PHARMACY, ctx);
+        batch::admin_revoke_regulator(&admin_registry, &mut registry, PHARMACY, ctx);
         assert!(!batch::is_regulator(&registry, PHARMACY), 0);
-        scenario.return_to_sender(admin);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -437,11 +441,12 @@ fun test_admin_add_regulator_rejects_duplicate() {
 
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
         // MANUFACTURER is already a regulator (seeded at init).
-        batch::admin_add_regulator(&admin, &mut registry, MANUFACTURER);
-        scenario.return_to_sender(admin);
+        batch::admin_add_regulator(&admin_registry, &mut registry, MANUFACTURER, ctx);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -456,10 +461,11 @@ fun test_admin_revoke_regulator_rejects_non_member() {
 
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<RegulatorRegistry>();
-        batch::admin_revoke_regulator(&admin, &mut registry, PHARMACY);
-        scenario.return_to_sender(admin);
+        let ctx = scenario.ctx();
+        batch::admin_revoke_regulator(&admin_registry, &mut registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -1093,10 +1099,11 @@ fun test_propose_then_confirm_release_by_different_regulators_succeeds() {
     // Onboard PHARMACY as a second regulator.
     scenario.next_tx(MANUFACTURER);
     {
-        let admin = scenario.take_from_sender<AdminCap>();
+        let admin_registry = scenario.take_shared<AdminRegistry>();
         let mut registry = scenario.take_shared<RegulatorRegistry>();
-        batch::admin_add_regulator(&admin, &mut registry, PHARMACY);
-        scenario.return_to_sender(admin);
+        let ctx = scenario.ctx();
+        batch::admin_add_regulator(&admin_registry, &mut registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
         test_scenario::return_shared(registry);
     };
 
@@ -1348,6 +1355,305 @@ fun test_purchase_and_burn_rejects_wrong_secret() {
         batch::purchase_and_burn(unit, &shared_batch, payment, b"wrong-guess", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_admin_add_admin_lets_new_admin_manage_registries() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-030");
+
+    // MANUFACTURER (seeded as the sole admin at init) adds PHARMACY as a
+    // second, backup admin.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_admin(&mut admin_registry, PHARMACY, ctx);
+        assert!(batch::is_admin(&admin_registry, PHARMACY), 0);
+        test_scenario::return_shared(admin_registry);
+    };
+
+    // PHARMACY, now an admin in its own right, onboards DISTRIBUTOR as a
+    // regulator without needing MANUFACTURER at all.
+    scenario.next_tx(PHARMACY);
+    {
+        let admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_regulator(&admin_registry, &mut registry, DISTRIBUTOR, ctx);
+        assert!(batch::is_regulator(&registry, DISTRIBUTOR), 1);
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 30 == batch::ECannotRemoveLastAdmin.
+#[test, expected_failure(abort_code = 30)]
+fun test_admin_remove_admin_rejects_removing_last_admin() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let ctx = scenario.ctx();
+        // MANUFACTURER is the only admin — this must abort rather than
+        // leave the registry with no admin able to ever change it again.
+        batch::admin_remove_admin(&mut admin_registry, MANUFACTURER, ctx);
+        test_scenario::return_shared(admin_registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_admin_remove_admin_allows_removing_a_backup() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_admin(&mut admin_registry, PHARMACY, ctx);
+        // Two admins now, so removing one is fine.
+        batch::admin_remove_admin(&mut admin_registry, PHARMACY, ctx);
+        assert!(!batch::is_admin(&admin_registry, PHARMACY), 0);
+        assert!(batch::is_admin(&admin_registry, MANUFACTURER), 1);
+        test_scenario::return_shared(admin_registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 32 == batch::EHoldNotYetOverdue.
+#[test, expected_failure(abort_code = 32)]
+fun test_escalate_stale_hold_rejects_before_threshold() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-031");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Just placed",
+            batch::severity_critical(),
+            batch::category_counterfeit(),
+            b"CASE-2026-031",
+            &clock,
+            ctx,
+        );
+        // Still well within the critical review window (1 day).
+        batch::escalate_stale_hold(&mut shared_batch, &clock);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_escalate_stale_hold_flags_overdue_hold() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-032");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Critical stop-sale",
+            batch::severity_critical(),
+            batch::category_counterfeit(),
+            b"CASE-2026-032",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    // A day later, nobody has released it yet — anyone can flag it.
+    scenario.next_tx(CUSTOMER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(batch::critical_review_ms());
+
+        assert!(!batch::hold_escalated(&shared_batch), 0);
+        batch::escalate_stale_hold(&mut shared_batch, &clock);
+        assert!(batch::hold_escalated(&shared_batch), 1);
+
+        let history = batch::hold_history(&shared_batch);
+        let last = history.borrow(history.length() - 1);
+        assert!(batch::hold_record_escalated(last), 2);
+
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 31 == batch::EHoldAlreadyEscalated.
+#[test, expected_failure(abort_code = 31)]
+fun test_escalate_stale_hold_rejects_double_escalation() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-033");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Critical stop-sale",
+            batch::severity_critical(),
+            batch::category_counterfeit(),
+            b"CASE-2026-033",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(batch::critical_review_ms());
+        batch::escalate_stale_hold(&mut shared_batch, &clock);
+        // Already escalated — a second call must abort, not double-flag.
+        batch::escalate_stale_hold(&mut shared_batch, &clock);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_new_hold_resets_escalation_flag() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-034");
+
+    // Place, escalate, and release a critical hold.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"First critical hold",
+            batch::severity_critical(),
+            batch::category_counterfeit(),
+            b"CASE-2026-034A",
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+    scenario.next_tx(CUSTOMER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(batch::critical_review_ms());
+        batch::escalate_stale_hold(&mut shared_batch, &clock);
+        assert!(batch::hold_escalated(&shared_batch), 0);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::propose_release(&registry, &mut shared_batch, b"Proposing release", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+    scenario.next_tx(MANUFACTURER);
+    {
+        // Onboard a second regulator so confirm_release has a different signer.
+        let admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_regulator(&admin_registry, &mut registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(registry);
+    };
+    scenario.next_tx(PHARMACY);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::confirm_release(&registry, &mut shared_batch, &clock, ctx);
+        // Release resets the current escalation flag.
+        assert!(!batch::hold_escalated(&shared_batch), 1);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    // A brand-new hold starts unescalated even though the old one was.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Second, unrelated hold",
+            batch::severity_advisory(),
+            batch::category_other(),
+            b"CASE-2026-034B",
+            &clock,
+            ctx,
+        );
+        assert!(!batch::hold_escalated(&shared_batch), 2);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
     };
 
     scenario.end();
