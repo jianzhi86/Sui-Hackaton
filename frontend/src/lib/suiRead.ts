@@ -1,3 +1,4 @@
+import { TEMPERATURE_OFFSET_C } from './network';
 import type { BatchRecord, Checkpoint, HoldRecord, UnitRecord } from './types';
 
 /**
@@ -14,6 +15,16 @@ function asNumber(value: unknown): number {
   if (typeof value === 'number') return value;
   if (typeof value === 'string') return Number(value);
   return 0;
+}
+
+/**
+ * A Move `vector<u8>` (like `Unit.secret_hash`) comes back from JSON-RPC
+ * as a plain array of byte numbers, not a string — this renders it as hex
+ * for storage/display/comparison.
+ */
+function bytesToHex(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return (value as number[]).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function unwrapFields(value: unknown): any {
@@ -52,6 +63,9 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
       location: String(cp.location ?? ''),
       timestampMs: asNumber(cp.timestamp_ms),
       note: String(cp.note ?? ''),
+      temperatureC: Boolean(cp.has_temperature)
+        ? asNumber(cp.temperature_c_offset) - TEMPERATURE_OFFSET_C
+        : null,
     };
   });
 
@@ -112,5 +126,6 @@ export function parseUnitObject(objectData: any): UnitRecord | null {
     price: asNumber(fields.price),
     manufacturer: String(fields.manufacturer ?? ''),
     mintedAtMs: asNumber(fields.minted_at_ms),
+    secretHash: bytesToHex(fields.secret_hash),
   };
 }

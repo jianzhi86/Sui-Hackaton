@@ -4,6 +4,9 @@ export interface Checkpoint {
   location: string;
   timestampMs: number;
   note: string;
+  /** `null` when no temperature was measured at this checkpoint — distinct
+   * from a real reading, including a real reading of 0°C. */
+  temperatureC: number | null;
 }
 
 /** Mirrors the `SEVERITY_*` constants in `pharma_track.move`. */
@@ -64,6 +67,10 @@ export interface UnitRecord {
   price: number;
   manufacturer: string;
   mintedAtMs: number;
+  /** SHA-256 hash (hex) of the one-time secret required to redeem this
+   * Unit — not sensitive itself (it's a hash), but the raw secret that
+   * hashes to it must never appear in the visible sale QR. */
+  secretHash: string;
 }
 
 export interface ModelVerdict {

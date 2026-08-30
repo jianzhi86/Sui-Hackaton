@@ -11,6 +11,7 @@ import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
 import { useToast } from '../lib/toast';
+import { COLD_CHAIN_MAX_C, COLD_CHAIN_MIN_C } from '../lib/chainAnalysis';
 
 /** How far ahead of expiry the UI starts warning — 60 days, a reasonable
  * pharma "reorder before this runs out" window. Purely a UI nudge; the
@@ -211,6 +212,20 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
                   {cp.location} · {new Date(cp.timestampMs).toLocaleString()}
                 </div>
                 {cp.note && <div className="ledger-note">{cp.note}</div>}
+                {cp.temperatureC !== null && (
+                  <div
+                    className="helper-text"
+                    style={
+                      cp.temperatureC < COLD_CHAIN_MIN_C || cp.temperatureC > COLD_CHAIN_MAX_C
+                        ? { color: 'var(--danger)' }
+                        : undefined
+                    }
+                  >
+                    🌡 {cp.temperatureC}°C
+                    {(cp.temperatureC < COLD_CHAIN_MIN_C || cp.temperatureC > COLD_CHAIN_MAX_C) &&
+                      ` — outside ${COLD_CHAIN_MIN_C}-${COLD_CHAIN_MAX_C}°C cold-chain range`}
+                  </div>
+                )}
                 <div className="helper-text">
                   Recorded by <CodeChip value={cp.actor} href={explorerAddressUrl(cp.actor)} />
                 </div>

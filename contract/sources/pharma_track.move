@@ -64,8 +64,28 @@
 /// expired after the fact. Unlike a hold, expiry is never reversible by a
 /// regulator action; it's a fact about the physical product, not a
 /// decision anyone gets to walk back.
+///
+/// A `Checkpoint` can optionally carry a temperature reading (`has_temperature`
+/// + `temperature_c_offset`, see the constant doc comment for the offset
+/// encoding) — cold-chain data for the off-chain anomaly layer to reason
+/// over. It's optional because not every custody handoff has a thermometer
+/// attached; a `false` doesn't mean "was fine," it means "wasn't measured."
+///
+/// A `Unit`'s sale QR only encodes its object ID, which is visible the
+/// moment it's printed or displayed — anyone who photographs it before the
+/// real buyer pays has everything needed to race them to `purchase_and_burn`,
+/// same as any barcode. `mint_unit` closes that by also taking a
+/// `secret_hash`: a hash of a one-time code that travels through a
+/// *separate* channel (told to the buyer verbally, printed on a receipt,
+/// under a scratch panel — anything not embedded in the visible QR).
+/// `purchase_and_burn` requires the matching preimage, so a cloned QR alone
+/// is not sufficient to redeem; the secret is the second factor. This doesn't
+/// replace the 10-minute expiry, it stacks with it — expiry bounds how long
+/// a leaked secret+QR pair stays dangerous, the secret bounds what a QR-only
+/// clone can do at all.
 module pharma_track::batch;
 
+use std::hash;
 use std::option::{Self, Option};
 use std::string::{Self, String};
 use sui::clock::{Self, Clock};
@@ -83,6 +103,14 @@ public struct Checkpoint has copy, drop, store {
     location: String,
     timestamp_ms: u64,
     note: String,
+    /// Whether a temperature was measured at this checkpoint at all —
+    /// `false` means "not measured," not "was in range."
+    has_temperature: bool,
+    /// Celsius reading plus `TEMPERATURE_OFFSET_C`, so it can be stored as
+    /// a `u64` despite Move having no signed integer type. Meaningless
+    /// when `has_temperature` is `false`. Subtract the offset back out to
+    /// get the real Celsius value.
+    temperature_c_offset: u64,
 }
 
 /// One full hold+release cycle. `released_by`/`released_at_ms`/`release_note`
@@ -202,6 +230,11 @@ public struct Unit has key {
     price: u64,
     manufacturer: address,
     minted_at_ms: u64,
+    /// SHA-256 hash of a one-time secret that must travel separately from
+    /// the visible QR (see the module doc comment). `purchase_and_burn`
+    /// checks the preimage against this, not against the `Unit`'s
+    /// existence alone.
+    secret_hash: vector<u8>,
 }
 
 fun init(ctx: &mut TxContext) {
@@ -246,6 +279,8 @@ public struct CheckpointAdded has copy, drop {
     location: String,
     timestamp_ms: u64,
     checkpoint_index: u64,
+    has_temperature: bool,
+    temperature_c_offset: u64,
 }
 
 public struct BatchHeld has copy, drop {
@@ -322,6 +357,8 @@ const EAlreadyManufacturer: u64 = 21;
 const ENotCurrentManufacturer: u64 = 22;
 const EInvalidExpiry: u64 = 23;
 const EBatchExpired: u64 = 24;
+const EInvalidSecretHash: u64 = 25;
+const ESecretMismatch: u64 = 26;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -356,6 +393,17 @@ const CATEGORY_OTHER: u8 = 5;
 /// forever (it can't be re-minted or extended), so the seller mints a
 /// fresh one for a new attempt.
 const UNIT_EXPIRY_MS: u64 = 600_000;
+
+/// Offset added to a Celsius reading before storing it as `u64` (Move has
+/// no signed integer type). 200 covers real-world cold-chain readings
+/// (typically -80°C to +50°C) with a lot of headroom; subtract this back
+/// out to recover the real Celsius value.
+const TEMPERATURE_OFFSET_C: u64 = 200;
+
+/// A `secret_hash` must be exactly a SHA-256 digest's length — this is a
+/// sanity check on the input shape, not a guarantee the hash was computed
+/// correctly.
+const SECRET_HASH_LENGTH: u64 = 32;
 
 // ===== Entry functions =====
 
@@ -417,11 +465,19 @@ public entry fun create_batch(
 /// Anyone can call this — the point of the MVP is that every call is
 /// permanently and publicly attributed to `ctx.sender()`, which is what
 /// the off-chain anomaly layer reasons over.
+///
+/// `has_temperature` / `temperature_c_offset` are always both passed (Move
+/// entry functions can't take optional arguments) — set `has_temperature`
+/// to `false` and `temperature_c_offset` to `0` when this checkpoint has
+/// no thermometer reading. See the module doc comment for the offset
+/// encoding.
 public entry fun add_checkpoint(
     batch: &mut Batch,
     role: vector<u8>,
     location: vector<u8>,
     note: vector<u8>,
+    has_temperature: bool,
+    temperature_c_offset: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -436,6 +492,8 @@ public entry fun add_checkpoint(
         location: string::utf8(location),
         timestamp_ms: now,
         note: string::utf8(note),
+        has_temperature,
+        temperature_c_offset,
     };
 
     batch.checkpoints.push_back(checkpoint);
@@ -447,6 +505,8 @@ public entry fun add_checkpoint(
         location: checkpoint.location,
         timestamp_ms: now,
         checkpoint_index: batch.checkpoints.length() - 1,
+        has_temperature,
+        temperature_c_offset,
     });
 }
 
@@ -460,9 +520,15 @@ public entry fun add_checkpoint(
 /// Aborts if the batch is on hold or already expired — a recalled,
 /// suspect, or out-of-date batch shouldn't be sellable in the first
 /// place, not just flagged after the fact.
+///
+/// `secret_hash` is the SHA-256 hash of a one-time code that the seller
+/// must deliver to the buyer through a channel other than this QR (see
+/// the module doc comment) — `purchase_and_burn` requires the matching
+/// preimage, so a photograph of just the QR isn't enough to redeem.
 public entry fun mint_unit(
     batch: &Batch,
     price: u64,
+    secret_hash: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -470,6 +536,7 @@ public entry fun mint_unit(
     let now = clock.timestamp_ms();
     assert!(now < batch.expiry_ms, EBatchExpired);
     assert!(price > 0, EZeroPrice);
+    assert!(secret_hash.length() == SECRET_HASH_LENGTH, EInvalidSecretHash);
 
     let unit = Unit {
         id: object::new(ctx),
@@ -477,6 +544,7 @@ public entry fun mint_unit(
         price,
         manufacturer: batch.manufacturer,
         minted_at_ms: now,
+        secret_hash,
     };
 
     event::emit(UnitMinted {
@@ -499,15 +567,22 @@ public entry fun mint_unit(
 /// time: a batch can go on hold in the window between a `Unit` being
 /// minted and someone paying for it, and the sale needs to stop the
 /// instant that happens, not just block new `Unit`s from then on.
+///
+/// `secret` must hash (SHA-256) to the `Unit`'s stored `secret_hash` — the
+/// buyer needs to have received the one-time code through whatever
+/// out-of-band channel the seller used, not just have scanned the visible
+/// QR. Wrong or missing secret aborts before any payment moves.
 public entry fun purchase_and_burn(
     unit: Unit,
     batch: &Batch,
     payment: Coin<SUI>,
+    secret: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(unit.batch_id == object::uid_to_address(&batch.id), EUnitBatchMismatch);
     assert!(!batch.is_held, EBatchHeld);
+    assert!(hash::sha2_256(secret) == unit.secret_hash, ESecretMismatch);
 
     let now = clock.timestamp_ms();
     assert!(now < batch.expiry_ms, EBatchExpired);
@@ -526,7 +601,7 @@ public entry fun purchase_and_burn(
 
     transfer::public_transfer(payment, unit.manufacturer);
 
-    let Unit { id, batch_id: _, price: _, manufacturer: _, minted_at_ms: _ } = unit;
+    let Unit { id, batch_id: _, price: _, manufacturer: _, minted_at_ms: _, secret_hash: _ } = unit;
     object::delete(id);
 }
 
@@ -804,6 +879,15 @@ public fun checkpoint_location(c: &Checkpoint): String { c.location }
 public fun checkpoint_timestamp_ms(c: &Checkpoint): u64 { c.timestamp_ms }
 
 public fun checkpoint_note(c: &Checkpoint): String { c.note }
+
+public fun checkpoint_has_temperature(c: &Checkpoint): bool { c.has_temperature }
+
+public fun checkpoint_temperature_c_offset(c: &Checkpoint): u64 { c.temperature_c_offset }
+
+/// Offset to subtract from `checkpoint_temperature_c_offset` to recover
+/// the real Celsius value — exposed so callers don't have to hardcode
+/// `TEMPERATURE_OFFSET_C`.
+public fun temperature_offset_c(): u64 { TEMPERATURE_OFFSET_C }
 
 public fun is_held(batch: &Batch): bool { batch.is_held }
 

@@ -6,7 +6,9 @@ import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { parseBatchObject } from '../lib/suiRead';
 import { useToast } from '../lib/toast';
+import { generateSecret, sha256Bytes } from '../lib/secret';
 import { QrCodeCard } from './QrCodeCard';
+import { CodeChip } from './CodeChip';
 
 interface CreatedObjectChange {
   type: string;
@@ -23,6 +25,7 @@ export function MintUnitForm() {
   const [priceSui, setPriceSui] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [createdUnitId, setCreatedUnitId] = useState<string | null>(null);
+  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
 
   // Checked purely so the form can warn before a doomed transaction —
   // `mint_unit` re-checks `is_held` on-chain regardless, so this is UX,
@@ -34,10 +37,11 @@ export function MintUnitForm() {
   );
   const batch = batchData ? parseBatchObject(batchData) : null;
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setCreatedUnitId(null);
+    setCreatedSecret(null);
 
     const priceNum = Number(priceSui);
     if (!batchId.trim()) {
@@ -59,10 +63,21 @@ export function MintUnitForm() {
 
     const priceMist = BigInt(Math.round(priceNum * Number(MIST_PER_SUI)));
 
+    // The secret never touches the visible QR — it's generated here,
+    // hashed for the on-chain call, and shown separately below for the
+    // pharmacist to hand to the buyer through a different channel.
+    const secret = generateSecret();
+    const secretHashBytes = await sha256Bytes(secret);
+
     const tx = new Transaction();
     tx.moveCall({
       target: target('mint_unit'),
-      arguments: [tx.object(batchId.trim()), tx.pure.u64(priceMist), tx.object(CLOCK_OBJECT_ID)],
+      arguments: [
+        tx.object(batchId.trim()),
+        tx.pure.u64(priceMist),
+        tx.pure.vector('u8', secretHashBytes),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
     });
 
     signAndExecute(
@@ -75,6 +90,7 @@ export function MintUnitForm() {
           );
           if (created?.objectId) {
             setCreatedUnitId(created.objectId);
+            setCreatedSecret(secret);
             toast.success('Sale QR minted.');
           } else {
             setError(
@@ -99,9 +115,9 @@ export function MintUnitForm() {
         Mints one on-chain <span className="code-chip">Unit</span> tied to a batch, priced in SUI.
         Generate this at the register, right as the customer is checking out — it expires 10
         minutes after minting, so don't pre-print it onto packaging or show it to anyone before
-        they're ready to pay. A photo of a code that's still sitting on a shelf is exactly what a
-        counterfeiter would want to clone; a code that only exists for the length of one checkout
-        gives them nothing to copy.
+        they're ready to pay. It also comes with a one-time scratch code that must be given to the
+        buyer separately from the QR — the QR alone (just an object ID) can be photographed and
+        cloned like any barcode, but a clone without the matching code can't be redeemed.
       </p>
 
       {!account && <p className="error-text">Connect a wallet to mint a sale QR.</p>}
@@ -155,18 +171,25 @@ export function MintUnitForm() {
         </button>
       </form>
 
-      {createdUnitId && payUrl && (
+      {createdUnitId && payUrl && createdSecret && (
         <div style={{ marginTop: 24 }}>
           <p className="success-banner">
-            Sale QR created for {priceSui} SUI, expiring in 10 minutes. Show it to the customer
-            now — anyone who scans and pays it first gets the medicine, so keep the screen turned
-            away from anyone else until they've paid.
+            Sale QR created for {priceSui} SUI, expiring in 10 minutes. Show the QR to the
+            customer to scan, then tell/write them the scratch code below <strong>separately</strong>{' '}
+            — do not show both together where a third party could photograph both at once. The QR
+            alone cannot be redeemed without this code.
           </p>
           <QrCodeCard
             value={payUrl}
             label="Scan to pay & dispense"
-            helper="Redeemable exactly once, within 10 minutes. After payment (or after it expires unpaid), this QR stops working for everyone, including the buyer who just used it."
+            helper="Redeemable exactly once, within 10 minutes, and only with the matching scratch code. After payment (or expiry), this QR stops working for everyone, including the buyer who just used it."
           />
+          <div className="qr-card" style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Scratch code — give to buyer separately, not with the QR
+            </div>
+            <CodeChip value={createdSecret} />
+          </div>
         </div>
       )}
     </section>

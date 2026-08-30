@@ -7,6 +7,14 @@ const EXPECTED_ORDER = ['manufacturer', 'distributor', 'pharmacy'];
 // biologics need a much tighter window than shelf-stable tablets.
 const MAX_PLAUSIBLE_GAP_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
 
+// Generic refrigerated-range bounds (matches the common 2-8°C "cold chain"
+// band used for many vaccines/biologics). Real deployments should make
+// this per-product — a frozen product's safe range looks nothing like a
+// refrigerated one's — but a single fixed band is a reasonable MVP default
+// for flagging obviously-out-of-range readings.
+export const COLD_CHAIN_MIN_C = 2;
+export const COLD_CHAIN_MAX_C = 8;
+
 /**
  * Fast, local, zero-cost checks over a batch's checkpoint history. These run
  * before (and independently of) the AI layer, and are shown on their own if
@@ -63,7 +71,20 @@ export function analyzeChain(batch: BatchRecord): string[] {
     }
   }
 
-  // 4. A later expected step exists without an earlier one — soft signal
+  // 4. Cold-chain temperature excursions — any recorded reading outside
+  //    the generic refrigerated band. A real deployment would use a
+  //    per-product range instead of one fixed band for every batch.
+  for (let i = 0; i < cps.length; i++) {
+    const temp = cps[i].temperatureC;
+    if (temp === null) continue;
+    if (temp < COLD_CHAIN_MIN_C || temp > COLD_CHAIN_MAX_C) {
+      findings.push(
+        `Checkpoint ${i + 1} ("${cps[i].role}" at "${cps[i].location}") recorded ${temp}°C — outside the ${COLD_CHAIN_MIN_C}-${COLD_CHAIN_MAX_C}°C cold-chain range. A sustained excursion can spoil a temperature-sensitive product even though nothing about the packaging looks wrong.`,
+      );
+    }
+  }
+
+  // 5. A later expected step exists without an earlier one — soft signal
   //    only, since real chains can legitimately have more hops than this
   //    three-step model assumes.
   const roles = cps.map((c) => c.role.toLowerCase());

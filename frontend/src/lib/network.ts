@@ -64,6 +64,13 @@ export const CLOCK_OBJECT_ID = '0x6';
  */
 export const UNIT_EXPIRY_MS = 600_000;
 
+/**
+ * Offset added to a Celsius reading before it's stored on-chain as a
+ * `u64` (Move has no signed integer type). Must match `TEMPERATURE_OFFSET_C`
+ * in `pharma_track.move`.
+ */
+export const TEMPERATURE_OFFSET_C = 200;
+
 type NetworkName = 'devnet' | 'testnet' | 'mainnet';
 const VALID_NETWORKS: readonly NetworkName[] = ['devnet', 'testnet', 'mainnet'];
 

@@ -1,6 +1,7 @@
-import { useSuiClientQuery } from '@mysten/dapp-kit';
+import { useSuiClient } from '@mysten/dapp-kit';
+import { useQuery } from '@tanstack/react-query';
 import { PACKAGE_ID } from '../lib/network';
-import { computeActiveHolds } from '../lib/activeHolds';
+import { computeActiveHolds, fetchAllEvents } from '../lib/activeHolds';
 import { CategoryBadge, SeverityBadge } from './HoldControl';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
@@ -20,24 +21,20 @@ interface ActiveHoldsDashboardProps {
  * consumer would actually want to browse.
  */
 export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProps) {
-  const heldQuery = useSuiClientQuery('queryEvents', {
-    query: { MoveEventType: `${PACKAGE_ID}::batch::BatchHeld` },
-    limit: 200,
-    order: 'descending',
-  });
-  const releasedQuery = useSuiClientQuery('queryEvents', {
-    query: { MoveEventType: `${PACKAGE_ID}::batch::BatchReleased` },
-    limit: 200,
-    order: 'descending',
+  const client = useSuiClient();
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['activeHolds', PACKAGE_ID],
+    queryFn: async () => {
+      const [held, released] = await Promise.all([
+        fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchHeld`),
+        fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchReleased`),
+      ]);
+      return computeActiveHolds(held, released);
+    },
   });
 
-  const isLoading = heldQuery.isLoading || releasedQuery.isLoading;
-  const isError = heldQuery.isError || releasedQuery.isError;
-
-  const activeHolds =
-    heldQuery.data && releasedQuery.data
-      ? computeActiveHolds(heldQuery.data.data, releasedQuery.data.data)
-      : [];
+  const activeHolds = data ?? [];
 
   return (
     <section className="panel">
@@ -45,9 +42,8 @@ export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProp
       <p className="panel-intro">
         Every batch currently frozen anywhere in the system — a public recall registry, not a
         per-item lookup tool. Built by reading on-chain hold events directly, so it works without
-        already knowing any batch ID. No wallet needed. Shows activity from the most recent 200
-        hold events; a hold old enough to fall off that window won't appear here even if still
-        active.
+        already knowing any batch ID. No wallet needed. Pages through up to 4,000 hold/release
+        events (20 pages of 200) rather than silently stopping at the first page.
       </p>
 
       {isLoading && <p className="helper-text">Reading hold events from Sui…</p>}

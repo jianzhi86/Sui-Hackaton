@@ -2,6 +2,7 @@
 module pharma_track::batch_tests;
 
 use pharma_track::batch::{Self, AdminCap, Batch, ManufacturerRegistry, RegulatorRegistry, Unit};
+use std::hash;
 use std::option;
 use std::string;
 use sui::clock;
@@ -17,6 +18,11 @@ const CUSTOMER: address = @0xD00D;
 /// Far enough out that no test's clock manipulation will accidentally
 /// cross it — used everywhere a test doesn't care about expiry itself.
 const FAR_FUTURE_MS: u64 = 4_102_444_800_000; // year 2100
+
+/// A stand-in one-time scratch-off code, used everywhere a test needs
+/// `mint_unit`/`purchase_and_burn`'s secret but isn't specifically testing
+/// the secret-mismatch behavior.
+const TEST_SECRET: vector<u8> = b"scratch-code-1234";
 
 /// Runs `init` (creating + sharing both registries and minting the
 /// `AdminCap` to MANUFACTURER, as if MANUFACTURER were the package
@@ -58,11 +64,15 @@ fun test_create_batch_and_add_checkpoint() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
+        // Reports a real temperature reading: 5°C, encoded as
+        // 5 + TEMPERATURE_OFFSET_C.
         batch::add_checkpoint(
             &mut shared_batch,
             b"distributor",
             b"Kuala Lumpur Distribution Hub",
             b"Received from manufacturer, seal intact",
+            true,
+            batch::temperature_offset_c() + 5,
             &clock,
             ctx,
         );
@@ -76,6 +86,8 @@ fun test_create_batch_and_add_checkpoint() {
         let first = checkpoints.borrow(0);
         assert!(batch::checkpoint_actor(first) == DISTRIBUTOR, 4);
         assert!(batch::checkpoint_role(first) == string::utf8(b"distributor"), 5);
+        assert!(batch::checkpoint_has_temperature(first), 6);
+        assert!(batch::checkpoint_temperature_c_offset(first) == batch::temperature_offset_c() + 5, 7);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
@@ -270,7 +282,7 @@ fun test_hold_blocks_checkpoint_then_release_allows_it() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
-        batch::add_checkpoint(&mut shared_batch, b"pharmacy", b"City Pharmacy", b"", &clock, ctx);
+        batch::add_checkpoint(&mut shared_batch, b"pharmacy", b"City Pharmacy", b"", false, 0, &clock, ctx);
         assert!(batch::checkpoint_count(&shared_batch) == 1, 4);
 
         clock.destroy_for_testing();
@@ -312,7 +324,7 @@ fun test_add_checkpoint_aborts_while_held() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         // abort_code 2 == batch::EBatchHeld
-        batch::add_checkpoint(&mut shared_batch, b"pharmacy", b"City Pharmacy", b"", &clock, ctx);
+        batch::add_checkpoint(&mut shared_batch, b"pharmacy", b"City Pharmacy", b"", false, 0, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -690,7 +702,7 @@ fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -703,7 +715,7 @@ fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -731,7 +743,7 @@ fun test_purchase_and_burn_rejects_wrong_payment() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -743,7 +755,7 @@ fun test_purchase_and_burn_rejects_wrong_payment() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(1, ctx);
-        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -765,7 +777,7 @@ fun test_purchase_and_burn_cannot_be_redeemed_twice() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -777,7 +789,7 @@ fun test_purchase_and_burn_cannot_be_redeemed_twice() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -803,7 +815,7 @@ fun test_purchase_and_burn_rejects_expired_unit() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -817,7 +829,7 @@ fun test_purchase_and_burn_rejects_expired_unit() {
         let mut clock = clock::create_for_testing(ctx);
         clock.set_for_testing(batch::unit_expiry_ms() + 1);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -858,7 +870,7 @@ fun test_mint_unit_rejects_held_batch() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -879,7 +891,7 @@ fun test_purchase_and_burn_rejects_batch_held_after_mint() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -913,7 +925,7 @@ fun test_purchase_and_burn_rejects_batch_held_after_mint() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -934,7 +946,7 @@ fun test_mint_unit_rejects_expired_batch() {
         let ctx = scenario.ctx();
         let mut clock = clock::create_for_testing(ctx);
         clock.set_for_testing(1_001); // past the batch's expiry_ms of 1_000
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -956,7 +968,7 @@ fun test_purchase_and_burn_rejects_batch_expired_after_mint() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx); // clock at 0, well before expiry
-        batch::mint_unit(&shared_batch, 100, &clock, ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -969,7 +981,7 @@ fun test_purchase_and_burn_rejects_batch_expired_after_mint() {
         let mut clock = clock::create_for_testing(ctx);
         clock.set_for_testing(10_001); // past expiry, still within the Unit's own 10-min window
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, &shared_batch, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -1008,7 +1020,7 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
         let batch_a = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&batch_a, 100, &clock, ctx);
+        batch::mint_unit(&batch_a, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(batch_a);
     };
@@ -1033,7 +1045,7 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         let payment = coin::mint_for_testing<SUI>(100, ctx);
-        batch::purchase_and_burn(unit, &batch_b, payment, &clock, ctx);
+        batch::purchase_and_burn(unit, &batch_b, payment, TEST_SECRET, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(batch_b);
     };
@@ -1279,6 +1291,63 @@ fun test_propose_release_rejects_duplicate_proposal() {
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
         test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 25 == batch::EInvalidSecretHash. A SHA-256 digest is always
+// 32 bytes; anything else is rejected outright rather than silently
+// accepted as an unreachable secret.
+#[test, expected_failure(abort_code = 25)]
+fun test_mint_unit_rejects_invalid_secret_hash_length() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch(&mut scenario, b"BATCH-2026-028", FAR_FUTURE_MS);
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        // Not a 32-byte hash — just a short string.
+        batch::mint_unit(&shared_batch, 100, b"too-short", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 26 == batch::ESecretMismatch. Knowing the Unit exists (and
+// even its price) isn't enough to redeem it — the buyer needs the actual
+// one-time code that was supposed to travel outside the visible QR.
+#[test, expected_failure(abort_code = 26)]
+fun test_purchase_and_burn_rejects_wrong_secret() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch(&mut scenario, b"BATCH-2026-029", FAR_FUTURE_MS);
+
+    scenario.next_tx(PHARMACY);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    // A counterfeiter who only has the visible QR (and so only knows the
+    // Unit's object ID, not the out-of-band secret) tries a guess.
+    scenario.next_tx(CUSTOMER);
+    {
+        let unit = scenario.take_shared<Unit>();
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(100, ctx);
+        batch::purchase_and_burn(unit, &shared_batch, payment, b"wrong-guess", &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
     };
 
     scenario.end();

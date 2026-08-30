@@ -1,5 +1,48 @@
 import type { HoldCategory, HoldSeverity } from './types';
 
+/** Loosely typed on purpose — dapp-kit's `useSuiClient()` return type
+ * varies across its legacy JSON-RPC vs. newer gRPC client paths (see the
+ * note in network.ts), and this only needs the one `queryEvents` method
+ * both expose with a compatible shape. */
+interface EventQueryClient {
+  queryEvents(input: any): Promise<{ data: any[]; hasNextPage: boolean; nextCursor?: unknown }>;
+}
+
+/**
+ * Safety cap on how many pages of events `fetchAllEvents` will follow —
+ * without this, a system with an enormous hold history could make the
+ * dashboard page forever. 20 pages of 200 events each (4000 total) is
+ * generous for a demo-scale deployment; a production version would want
+ * proper incremental pagination (e.g. only fetching pages newer than the
+ * last render) instead of refetching everything on each load.
+ */
+const MAX_EVENT_PAGES = 20;
+const EVENTS_PER_PAGE = 200;
+
+/**
+ * Follows `queryEvents`'s cursor until exhausted or `MAX_EVENT_PAGES` is
+ * hit, returning every event seen. Replaces an earlier single-page
+ * `useSuiClientQuery` call that silently missed any hold event older than
+ * the first 200 — this raises that ceiling by 20x and makes the limit
+ * explicit rather than an invisible truncation.
+ */
+export async function fetchAllEvents(client: EventQueryClient, moveEventType: string): Promise<any[]> {
+  const all: any[] = [];
+  let cursor: any = null;
+  for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+    const result = await client.queryEvents({
+      query: { MoveEventType: moveEventType },
+      cursor,
+      limit: EVENTS_PER_PAGE,
+      order: 'descending',
+    });
+    all.push(...result.data);
+    if (!result.hasNextPage || !result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+  return all;
+}
+
 export interface ActiveHoldSummary {
   batchId: string;
   heldBy: string;

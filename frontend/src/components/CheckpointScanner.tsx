@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, TEMPERATURE_OFFSET_C, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { QrScanButton } from './QrScanButton';
 import { extractBatchId } from '../lib/qr';
@@ -20,6 +20,8 @@ export function CheckpointScanner() {
   const [role, setRole] = useState(ROLES[0]);
   const [location, setLocation] = useState('');
   const [note, setNote] = useState('');
+  const [hasTemperature, setHasTemperature] = useState(false);
+  const [temperatureC, setTemperatureC] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
 
@@ -32,6 +34,22 @@ export function CheckpointScanner() {
       return;
     }
 
+    let temperatureCOffset = 0;
+    if (hasTemperature) {
+      const tempNum = Number(temperatureC);
+      if (!temperatureC.trim() || !Number.isFinite(tempNum)) {
+        setError('Enter a valid temperature, or uncheck "temperature measured" if there is none.');
+        return;
+      }
+      // Move has no signed integer type — see TEMPERATURE_OFFSET_C's doc
+      // comment in network.ts / pharma_track.move.
+      temperatureCOffset = Math.round(tempNum) + TEMPERATURE_OFFSET_C;
+      if (temperatureCOffset < 0) {
+        setError(`Temperature is too far below the supported range (must be ≥ -${TEMPERATURE_OFFSET_C}°C).`);
+        return;
+      }
+    }
+
     const tx = new Transaction();
     tx.moveCall({
       target: target('add_checkpoint'),
@@ -40,6 +58,8 @@ export function CheckpointScanner() {
         tx.pure.string(role),
         tx.pure.string(location.trim()),
         tx.pure.string(note.trim()),
+        tx.pure.bool(hasTemperature),
+        tx.pure.u64(temperatureCOffset),
         tx.object(CLOCK_OBJECT_ID),
       ],
     });
@@ -52,6 +72,7 @@ export function CheckpointScanner() {
           toast.success('Checkpoint recorded.');
           setLocation('');
           setNote('');
+          setTemperatureC('');
         },
         onError: (err) => toast.error(err.message),
       },
@@ -127,6 +148,35 @@ export function CheckpointScanner() {
             placeholder="e.g. Received, seal intact"
             disabled={!account || isPending}
           />
+        </div>
+
+        <div className="field-row">
+          <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <input
+              id="hasTemperature"
+              type="checkbox"
+              checked={hasTemperature}
+              onChange={(e) => setHasTemperature(e.target.checked)}
+              disabled={!account || isPending}
+            />
+            <label htmlFor="hasTemperature" style={{ marginBottom: 0 }}>
+              Temperature measured (cold-chain)
+            </label>
+          </div>
+          {hasTemperature && (
+            <div className="field">
+              <label htmlFor="temperatureC">Temperature (°C)</label>
+              <input
+                id="temperatureC"
+                type="number"
+                step="0.1"
+                value={temperatureC}
+                onChange={(e) => setTemperatureC(e.target.value)}
+                placeholder="e.g. 5"
+                disabled={!account || isPending}
+              />
+            </div>
+          )}
         </div>
 
         <button type="submit" className="btn btn-primary" disabled={!account || isPending}>
