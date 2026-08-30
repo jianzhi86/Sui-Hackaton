@@ -1,7 +1,16 @@
 #[test_only]
 module pharma_track::batch_tests;
 
-use pharma_track::batch::{Self, AdminRegistry, Batch, ManufacturerRegistry, RegulatorRegistry, Unit};
+use pharma_track::batch::{
+    Self,
+    AdminRegistry,
+    Batch,
+    ManufacturerRegistry,
+    PharmacyRegistry,
+    RegulatorRegistry,
+    SuspicionReport,
+    Unit,
+};
 use std::hash;
 use std::option;
 use std::string;
@@ -43,6 +52,17 @@ fun setup_batch(scenario: &mut test_scenario::Scenario, batch_code: vector<u8>, 
         batch::create_batch(&registry, batch_code, b"Amoxicillin 500mg", expiry_ms, coin::zero<SUI>(ctx), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(registry);
+    };
+    // Onboard PHARMACY as a listed pharmacy — most tests act as PHARMACY
+    // when minting a Unit, and mint_unit now requires registry membership.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_pharmacy(&admin_registry, &mut pharmacy_registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(pharmacy_registry);
     };
 }
 
@@ -706,11 +726,13 @@ fun test_purchase_and_burn_pays_manufacturer_and_deletes_unit() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     // Customer scans it and pays the exact price.
@@ -747,11 +769,13 @@ fun test_purchase_and_burn_rejects_wrong_payment() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.next_tx(CUSTOMER);
@@ -781,11 +805,13 @@ fun test_purchase_and_burn_cannot_be_redeemed_twice() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.next_tx(CUSTOMER);
@@ -819,11 +845,13 @@ fun test_purchase_and_burn_rejects_expired_unit() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     // Customer doesn't scan it until well past the redemption window.
@@ -874,11 +902,13 @@ fun test_mint_unit_rejects_held_batch() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.end();
@@ -895,11 +925,13 @@ fun test_purchase_and_burn_rejects_batch_held_after_mint() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     // A hold lands in the window between minting and payment.
@@ -949,12 +981,14 @@ fun test_mint_unit_rejects_expired_batch() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let mut clock = clock::create_for_testing(ctx);
         clock.set_for_testing(1_001); // past the batch's expiry_ms of 1_000
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.end();
@@ -972,11 +1006,13 @@ fun test_purchase_and_burn_rejects_batch_expired_after_mint() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx); // clock at 0, well before expiry
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.next_tx(CUSTOMER);
@@ -1021,14 +1057,26 @@ fun test_purchase_and_burn_rejects_wrong_batch() {
         test_scenario::return_shared(registry);
     };
 
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_pharmacy(&admin_registry, &mut pharmacy_registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(pharmacy_registry);
+    };
+
     scenario.next_tx(PHARMACY);
     {
         let batch_a = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&batch_a, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &batch_a, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(batch_a);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     // Batch B is created — and therefore shared — after A was last
@@ -1314,12 +1362,14 @@ fun test_mint_unit_rejects_invalid_secret_hash_length() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
         // Not a 32-byte hash — just a short string.
-        batch::mint_unit(&shared_batch, 100, b"too-short", &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, b"too-short", &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.end();
@@ -1336,11 +1386,13 @@ fun test_purchase_and_burn_rejects_wrong_secret() {
     scenario.next_tx(PHARMACY);
     {
         let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::mint_unit(&shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     // A counterfeiter who only has the visible QR (and so only knows the
@@ -1376,17 +1428,46 @@ fun test_admin_add_admin_lets_new_admin_manage_registries() {
         test_scenario::return_shared(admin_registry);
     };
 
-    // PHARMACY, now an admin in its own right, onboards DISTRIBUTOR as a
-    // regulator without needing MANUFACTURER at all.
+    // Now that a second admin exists, onboarding a regulator requires
+    // propose + confirm from two *different* admins, not a direct call.
     scenario.next_tx(PHARMACY);
     {
-        let admin_registry = scenario.take_shared<AdminRegistry>();
-        let mut registry = scenario.take_shared<RegulatorRegistry>();
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
         let ctx = scenario.ctx();
-        batch::admin_add_regulator(&admin_registry, &mut registry, DISTRIBUTOR, ctx);
-        assert!(batch::is_regulator(&registry, DISTRIBUTOR), 1);
+        let clock = clock::create_for_testing(ctx);
+        batch::propose_admin_action(
+            &mut admin_registry,
+            batch::admin_action_add_regulator(),
+            DISTRIBUTOR,
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
         test_scenario::return_shared(admin_registry);
-        test_scenario::return_shared(registry);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut regulator_registry = scenario.take_shared<RegulatorRegistry>();
+        let mut manufacturer_registry = scenario.take_shared<ManufacturerRegistry>();
+        let mut pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::confirm_admin_action(
+            &mut admin_registry,
+            &mut regulator_registry,
+            &mut manufacturer_registry,
+            &mut pharmacy_registry,
+            &clock,
+            ctx,
+        );
+        assert!(batch::is_regulator(&regulator_registry, DISTRIBUTOR), 1);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(regulator_registry);
+        test_scenario::return_shared(manufacturer_registry);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.end();
@@ -1415,7 +1496,65 @@ fun test_admin_remove_admin_rejects_removing_last_admin() {
 }
 
 #[test]
-fun test_admin_remove_admin_allows_removing_a_backup() {
+fun test_confirm_admin_action_removes_a_backup_admin() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    // Single admin — adding a backup is direct, single-signer.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_admin(&mut admin_registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
+    };
+
+    // Two admins now — removing one requires propose + confirm from a
+    // *different* admin, not a direct single-signer call.
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::propose_admin_action(&mut admin_registry, batch::admin_action_remove_admin(), PHARMACY, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(admin_registry);
+    };
+
+    scenario.next_tx(PHARMACY);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut regulator_registry = scenario.take_shared<RegulatorRegistry>();
+        let mut manufacturer_registry = scenario.take_shared<ManufacturerRegistry>();
+        let mut pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::confirm_admin_action(
+            &mut admin_registry,
+            &mut regulator_registry,
+            &mut manufacturer_registry,
+            &mut pharmacy_registry,
+            &clock,
+            ctx,
+        );
+        assert!(!batch::is_admin(&admin_registry, PHARMACY), 0);
+        assert!(batch::is_admin(&admin_registry, MANUFACTURER), 1);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(regulator_registry);
+        test_scenario::return_shared(manufacturer_registry);
+        test_scenario::return_shared(pharmacy_registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 41 == batch::EAdminActionRequiresProposal.
+#[test, expected_failure(abort_code = 41)]
+fun test_admin_remove_admin_rejects_direct_call_once_two_admins_exist() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
     {
         let ctx = scenario.ctx();
@@ -1427,11 +1566,61 @@ fun test_admin_remove_admin_allows_removing_a_backup() {
         let mut admin_registry = scenario.take_shared<AdminRegistry>();
         let ctx = scenario.ctx();
         batch::admin_add_admin(&mut admin_registry, PHARMACY, ctx);
-        // Two admins now, so removing one is fine.
+        // Two admins now — this direct call must abort, not silently
+        // bypass the propose/confirm requirement.
         batch::admin_remove_admin(&mut admin_registry, PHARMACY, ctx);
-        assert!(!batch::is_admin(&admin_registry, PHARMACY), 0);
-        assert!(batch::is_admin(&admin_registry, MANUFACTURER), 1);
         test_scenario::return_shared(admin_registry);
+    };
+
+    scenario.end();
+}
+
+// abort_code 44 == batch::ESameAdminCannotConfirmAction.
+#[test, expected_failure(abort_code = 44)]
+fun test_confirm_admin_action_rejects_same_admin() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    {
+        let ctx = scenario.ctx();
+        batch::test_init(ctx);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_admin(&mut admin_registry, PHARMACY, ctx);
+        test_scenario::return_shared(admin_registry);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut regulator_registry = scenario.take_shared<RegulatorRegistry>();
+        let mut manufacturer_registry = scenario.take_shared<ManufacturerRegistry>();
+        let mut pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::propose_admin_action(
+            &mut admin_registry,
+            batch::admin_action_add_regulator(),
+            DISTRIBUTOR,
+            &clock,
+            ctx,
+        );
+        // Same admin (MANUFACTURER) tries to confirm their own proposal.
+        batch::confirm_admin_action(
+            &mut admin_registry,
+            &mut regulator_registry,
+            &mut manufacturer_registry,
+            &mut pharmacy_registry,
+            &clock,
+            ctx,
+        );
+        clock.destroy_for_testing();
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(regulator_registry);
+        test_scenario::return_shared(manufacturer_registry);
+        test_scenario::return_shared(pharmacy_registry);
     };
 
     scenario.end();
@@ -1665,16 +1854,26 @@ fun test_report_suspicion_does_not_change_batch_state() {
     setup_batch_with_registry(&mut scenario, b"BATCH-2026-035");
 
     // Anyone -- not just a regulator -- can leave a tip. It's read-only:
-    // the batch's hold state is untouched, this only emits an event.
+    // the batch's hold state is untouched, this only emits an event and
+    // shares a bonded SuspicionReport object.
     scenario.next_tx(CUSTOMER);
     {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::report_suspicion(&shared_batch, b"Seal looked tampered with", &clock, ctx);
+        let bond = coin::mint_for_testing<SUI>(10, ctx);
+        batch::report_suspicion(&shared_batch, b"Seal looked tampered with", bond, &clock, ctx);
         assert!(!batch::is_held(&shared_batch), 0);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let report = scenario.take_shared<SuspicionReport>();
+        assert!(batch::suspicion_report_reporter(&report) == CUSTOMER, 1);
+        assert!(batch::suspicion_report_bond_amount(&report) == 10, 2);
+        test_scenario::return_shared(report);
     };
 
     scenario.end();
@@ -1691,7 +1890,8 @@ fun test_report_suspicion_rejects_empty_note() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        batch::report_suspicion(&shared_batch, b"", &clock, ctx);
+        let bond = coin::mint_for_testing<SUI>(10, ctx);
+        batch::report_suspicion(&shared_batch, b"", bond, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -1770,7 +1970,7 @@ fun test_place_critical_counterfeit_hold_slashes_stake_to_regulator() {
 }
 
 #[test]
-fun test_non_counterfeit_critical_hold_does_not_slash_stake() {
+fun test_critical_cold_chain_hold_partially_slashes_stake() {
     let mut scenario = test_scenario::begin(MANUFACTURER);
     setup_staked_batch(&mut scenario, b"BATCH-2026-038", FAR_FUTURE_MS, 500);
 
@@ -1781,9 +1981,12 @@ fun test_non_counterfeit_critical_hold_does_not_slash_stake() {
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
 
-        // Critical, but a cold-chain breach rather than counterfeit -- the
-        // stake is specifically a counterfeit bond, not a general-purpose
-        // penalty for any Critical hold.
+        // Critical, but a cold-chain breach rather than counterfeit --
+        // real manufacturer fault, but not fraud, so this slashes at the
+        // lower 50% rate (`slash_percent`) rather than the full 100% a
+        // confirmed counterfeit finding carries, and rather than nothing
+        // at all.
+        assert!(batch::stake_slash_percent(batch::severity_critical(), batch::category_cold_chain_breach()) == 50, 9);
         batch::place_hold(
             &registry,
             &mut shared_batch,
@@ -1795,7 +1998,7 @@ fun test_non_counterfeit_critical_hold_does_not_slash_stake() {
             ctx,
         );
 
-        assert!(batch::stake_amount(&shared_batch) == 500, 0);
+        assert!(batch::stake_amount(&shared_batch) == 250, 0);
 
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
@@ -1891,6 +2094,134 @@ fun test_withdraw_stake_rejects_double_withdraw() {
         batch::withdraw_stake(&mut shared_batch, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 37 == batch::ENotPharmacy.
+#[test, expected_failure(abort_code = 37)]
+fun test_mint_unit_rejects_non_pharmacy() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-043");
+
+    // CUSTOMER was never onboarded as a pharmacy — unlike PHARMACY, which
+    // `setup_batch` seeds automatically.
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_admin_add_pharmacy_lets_new_holder_mint_unit() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-044");
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let admin_registry = scenario.take_shared<AdminRegistry>();
+        let mut pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        batch::admin_add_pharmacy(&admin_registry, &mut pharmacy_registry, CUSTOMER, ctx);
+        assert!(batch::is_pharmacy(&pharmacy_registry, CUSTOMER), 0);
+        test_scenario::return_shared(admin_registry);
+        test_scenario::return_shared(pharmacy_registry);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let pharmacy_registry = scenario.take_shared<PharmacyRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::mint_unit(&pharmacy_registry, &shared_batch, 100, hash::sha2_256(TEST_SECRET), &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(pharmacy_registry);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_confirm_suspicion_refunds_bond_to_reporter() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-045");
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let bond = coin::mint_for_testing<SUI>(50, ctx);
+        batch::report_suspicion(&shared_batch, b"Blister pack colour looked off", bond, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let report = scenario.take_shared<SuspicionReport>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::confirm_suspicion(report, &registry, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let refund = scenario.take_from_sender<coin::Coin<SUI>>();
+        assert!(coin::value(&refund) == 50, 0);
+        test_scenario::return_to_sender(&scenario, refund);
+    };
+
+    scenario.end();
+}
+
+#[test]
+fun test_reject_suspicion_forfeits_bond_to_regulator() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-046");
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let bond = coin::mint_for_testing<SUI>(50, ctx);
+        batch::report_suspicion(&shared_batch, b"Just seemed off, no real reason", bond, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let report = scenario.take_shared<SuspicionReport>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::reject_suspicion(report, &registry, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let forfeited = scenario.take_from_sender<coin::Coin<SUI>>();
+        assert!(coin::value(&forfeited) == 50, 0);
+        test_scenario::return_to_sender(&scenario, forfeited);
     };
 
     scenario.end();

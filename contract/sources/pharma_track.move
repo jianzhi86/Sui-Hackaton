@@ -206,17 +206,39 @@ public struct Batch has key {
     stake: Balance<SUI>,
 }
 
-/// Shared allow-list of addresses that can manage the regulator and
-/// manufacturer registries. Replaces an earlier single bearer `AdminCap`
-/// object: losing that object (or it leaking) would have permanently
-/// locked out every future admin action, with no way to recover. An
-/// allow-list lets a backup admin be seeded ahead of time via
+/// Shared allow-list of addresses that can manage the regulator,
+/// manufacturer, and pharmacy registries. Replaces an earlier single
+/// bearer `AdminCap` object: losing that object (or it leaking) would have
+/// permanently locked out every future admin action, with no way to
+/// recover. An allow-list lets a backup admin be seeded ahead of time via
 /// `admin_add_admin`, and `admin_remove_admin` refuses to remove the last
 /// remaining admin (`ECannotRemoveLastAdmin`) so this can't be emptied
 /// into the same unrecoverable state it replaces.
+///
+/// While exactly one admin exists, every `admin_*` function below acts
+/// immediately, single-signer — there's nobody else who could confirm a
+/// proposal, so requiring one would just deadlock a fresh deployment.
+/// Once a second admin has been added, those same functions instead
+/// require `propose_admin_action` from one admin followed by
+/// `confirm_admin_action` from a *different* one — the same two-signer
+/// reasoning as a Critical hold's release, applied to admin actions
+/// themselves once more than one admin exists to actually check each
+/// other. `pending_action` holds at most one action awaiting confirmation
+/// at a time.
 public struct AdminRegistry has key {
     id: UID,
     admins: VecSet<address>,
+    pending_action: Option<PendingAdminAction>,
+}
+
+/// One admin action (add/revoke regulator, manufacturer, pharmacy, or
+/// admin) awaiting a second admin's confirmation — see `AdminRegistry`'s
+/// doc comment. `action_kind` is one of the `ADMIN_ACTION_*` constants.
+public struct PendingAdminAction has copy, drop, store {
+    action_kind: u8,
+    target_addr: address,
+    proposed_by: address,
+    proposed_at_ms: u64,
 }
 
 /// The shared allow-list of addresses that can place/release holds.
@@ -237,6 +259,17 @@ public struct RegulatorRegistry has key {
 public struct ManufacturerRegistry has key {
     id: UID,
     manufacturers: VecSet<address>,
+}
+
+/// The shared allow-list of addresses that can call `mint_unit`. Without
+/// this, "pharmacy" was never a vetted claim anywhere in the system —
+/// unlike `manufacturer` (gated by `ManufacturerRegistry`) and `regulator`
+/// (gated by `RegulatorRegistry`), any wallet could mint a sale QR against
+/// any batch. Same allow-list pattern and same `AdminRegistry` as the
+/// other two roles.
+public struct PharmacyRegistry has key {
+    id: UID,
+    pharmacies: VecSet<address>,
 }
 
 /// One physical, sellable dose/pack of a batch, represented as its own
@@ -263,12 +296,30 @@ public struct Unit has key {
     secret_hash: vector<u8>,
 }
 
+/// A permissionless suspicion tip, backed by a small bonded stake so the
+/// public report feed can't be flooded for free. `report_suspicion`
+/// creates and shares one of these; a listed regulator later calls
+/// `confirm_suspicion` (bond refunded to the reporter) or `reject_suspicion`
+/// (bond forfeited to the regulator, compensating their time reviewing a
+/// spam/unfounded tip) to consume it. Anyone can still read the
+/// `SuspicionReported` event immediately — the report's existence and
+/// content are public the moment it's submitted, before any regulator has
+/// looked at it.
+public struct SuspicionReport has key {
+    id: UID,
+    batch_id: address,
+    reporter: address,
+    note: String,
+    reported_at_ms: u64,
+    bond: Balance<SUI>,
+}
+
 fun init(ctx: &mut TxContext) {
     let sender = ctx.sender();
 
     let mut admins = vec_set::empty<address>();
     admins.insert(sender);
-    transfer::share_object(AdminRegistry { id: object::new(ctx), admins });
+    transfer::share_object(AdminRegistry { id: object::new(ctx), admins, pending_action: option::none() });
 
     let mut regulators = vec_set::empty<address>();
     regulators.insert(sender);
@@ -277,6 +328,10 @@ fun init(ctx: &mut TxContext) {
     let mut manufacturers = vec_set::empty<address>();
     manufacturers.insert(sender);
     transfer::share_object(ManufacturerRegistry { id: object::new(ctx), manufacturers });
+
+    let mut pharmacies = vec_set::empty<address>();
+    pharmacies.insert(sender);
+    transfer::share_object(PharmacyRegistry { id: object::new(ctx), pharmacies });
 }
 
 #[test_only]
@@ -304,19 +359,42 @@ public struct BatchCreated has copy, drop {
 
 /// Emitted by `report_suspicion` — a permissionless, public "something
 /// looks wrong here" signal from anyone (customer, pharmacist, competitor),
-/// distinct from a regulator's `BatchHeld`. Doesn't change any on-chain
-/// state by itself; it's a tip, not a verdict. The Verify page surfaces
-/// these so a regulator deciding whether to investigate isn't relying on
-/// out-of-band channels to hear about a suspicious batch in the first place.
+/// distinct from a regulator's `BatchHeld`. Doesn't change any batch state
+/// by itself; it's a tip, not a verdict. The Verify page surfaces these so
+/// a regulator deciding whether to investigate isn't relying on
+/// out-of-band channels to hear about a suspicious batch in the first
+/// place. `report_id` points at the shared `SuspicionReport` object
+/// holding the bond, so a regulator can look it up to confirm or reject.
 public struct SuspicionReported has copy, drop {
+    report_id: address,
     batch_id: address,
     reporter: address,
     note: String,
+    bond_amount: u64,
     reported_at_ms: u64,
 }
 
-/// Emitted by `place_hold` when a Critical + Counterfeit hold slashes the
-/// batch's stake to the placing regulator.
+/// Emitted by `confirm_suspicion` — a regulator judged the report
+/// legitimate and the reporter's bond was refunded to them.
+public struct SuspicionConfirmed has copy, drop {
+    report_id: address,
+    batch_id: address,
+    confirmed_by: address,
+    confirmed_at_ms: u64,
+}
+
+/// Emitted by `reject_suspicion` — a regulator judged the report spam or
+/// unfounded; the bond was forfeited to them for the time spent reviewing it.
+public struct SuspicionRejected has copy, drop {
+    report_id: address,
+    batch_id: address,
+    rejected_by: address,
+    rejected_at_ms: u64,
+}
+
+/// Emitted by `place_hold` when a hold slashes some or all of the batch's
+/// stake to the placing regulator — see `slash_percent`'s doc comment for
+/// which severity/category combinations trigger this and at what rate.
 public struct StakeSlashed has copy, drop {
     batch_id: address,
     regulator: address,
@@ -331,6 +409,26 @@ public struct StakeWithdrawn has copy, drop {
     manufacturer: address,
     amount: u64,
     withdrawn_at_ms: u64,
+}
+
+/// Emitted by `propose_admin_action` — the first of the two signatures a
+/// sensitive admin action requires once `AdminRegistry` has more than one
+/// admin. See `AdminRegistry`'s doc comment.
+public struct AdminActionProposed has copy, drop {
+    action_kind: u8,
+    target_addr: address,
+    proposed_by: address,
+    proposed_at_ms: u64,
+}
+
+/// Emitted by `confirm_admin_action` once a second, different admin
+/// confirms and the action actually takes effect.
+public struct AdminActionConfirmed has copy, drop {
+    action_kind: u8,
+    target_addr: address,
+    proposed_by: address,
+    confirmed_by: address,
+    confirmed_at_ms: u64,
 }
 
 public struct CheckpointAdded has copy, drop {
@@ -442,6 +540,15 @@ const EEmptySuspicionNote: u64 = 33;
 const ENotBatchManufacturer: u64 = 34;
 const EStakeLockedUntilExpiry: u64 = 35;
 const EStakeAlreadyEmpty: u64 = 36;
+const ENotPharmacy: u64 = 37;
+const EAlreadyPharmacy: u64 = 38;
+const ENotCurrentPharmacy: u64 = 39;
+const EZeroBond: u64 = 40;
+const EAdminActionRequiresProposal: u64 = 41;
+const EAdminActionAlreadyProposed: u64 = 42;
+const ENoAdminActionProposed: u64 = 43;
+const ESameAdminCannotConfirmAction: u64 = 44;
+const EInvalidAdminActionKind: u64 = 45;
 
 /// Hold severity classifications, loosely modeled on how regulators
 /// actually grade recalls (e.g. FDA Class I/II/III): the higher the
@@ -462,6 +569,18 @@ const CATEGORY_QUALITY_DEFECT: u8 = 2;
 const CATEGORY_LABELING_ERROR: u8 = 3;
 const CATEGORY_COLD_CHAIN_BREACH: u8 = 4;
 const CATEGORY_OTHER: u8 = 5;
+
+/// Which admin action a `PendingAdminAction` represents — see
+/// `AdminRegistry`'s doc comment for when these go through direct
+/// single-signer calls vs. `propose_admin_action`/`confirm_admin_action`.
+const ADMIN_ACTION_ADD_REGULATOR: u8 = 1;
+const ADMIN_ACTION_REVOKE_REGULATOR: u8 = 2;
+const ADMIN_ACTION_ADD_MANUFACTURER: u8 = 3;
+const ADMIN_ACTION_REVOKE_MANUFACTURER: u8 = 4;
+const ADMIN_ACTION_ADD_PHARMACY: u8 = 5;
+const ADMIN_ACTION_REVOKE_PHARMACY: u8 = 6;
+const ADMIN_ACTION_ADD_ADMIN: u8 = 7;
+const ADMIN_ACTION_REMOVE_ADMIN: u8 = 8;
 
 /// How long a `Unit` stays redeemable after minting, in milliseconds
 /// (10 minutes). Short on purpose: a `Unit` is meant to be minted at the
@@ -620,11 +739,13 @@ public entry fun add_checkpoint(
 }
 
 /// Mint one sellable, single-use `Unit` against a batch. Called by
-/// whoever is dispensing the physical package (typically the pharmacy) at
-/// the price they're selling it for, in MIST. The returned QR should be
-/// printed/shown on that one physical package only — anyone who redeems
-/// it via `purchase_and_burn` gets the object deleted out from under any
-/// later scan.
+/// whoever is dispensing the physical package — requires the caller's
+/// address to be listed in `registry`, otherwise "pharmacy" would just be
+/// a self-declared label anyone could type, the same gap `ManufacturerRegistry`
+/// closed for `create_batch`. The returned QR should be printed/shown on
+/// that one physical package only — anyone who redeems it via
+/// `purchase_and_burn` gets the object deleted out from under any later
+/// scan.
 ///
 /// Aborts if the batch is on hold or already expired — a recalled,
 /// suspect, or out-of-date batch shouldn't be sellable in the first
@@ -635,12 +756,14 @@ public entry fun add_checkpoint(
 /// the module doc comment) — `purchase_and_burn` requires the matching
 /// preimage, so a photograph of just the QR isn't enough to redeem.
 public entry fun mint_unit(
+    registry: &PharmacyRegistry,
     batch: &Batch,
     price: u64,
     secret_hash: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    assert!(registry.pharmacies.contains(&ctx.sender()), ENotPharmacy);
     assert!(!batch.is_held, EBatchHeld);
     let now = clock.timestamp_ms();
     assert!(now < batch.expiry_ms, EBatchExpired);
@@ -786,39 +909,147 @@ public entry fun place_hold(
         held_at_ms: now,
     });
 
-    // A Critical + Counterfeit finding is the one hold combination with a
-    // real financial claim behind it: the manufacturer put up collateral
-    // specifically against this outcome. Slashing it to the regulator who
-    // caught it (rather than burning it or routing it to a treasury) turns
-    // enforcement into a paid bounty, not just unpaid diligence.
-    if (severity == SEVERITY_CRITICAL && category == CATEGORY_COUNTERFEIT && batch.stake.value() > 0) {
-        let amount = batch.stake.value();
-        let slashed = coin::from_balance(batch.stake.withdraw_all(), ctx);
-        transfer::public_transfer(slashed, sender);
-        event::emit(StakeSlashed {
-            batch_id: object::uid_to_address(&batch.id),
-            regulator: sender,
-            amount,
-            slashed_at_ms: now,
-        });
+    // Not every hold represents an adjudicated claim against the
+    // manufacturer's stake — only some severity/category combinations do,
+    // and not always for the full amount. See `slash_percent`'s doc
+    // comment. Slashing to the regulator who placed the hold (rather than
+    // burning it or routing it to a treasury) turns enforcement into a
+    // paid bounty, not just unpaid diligence.
+    let percent = slash_percent(severity, category);
+    if (percent > 0 && batch.stake.value() > 0) {
+        let full = batch.stake.value();
+        let slash_amount = full * percent / 100;
+        if (slash_amount > 0) {
+            let slashed = coin::from_balance(batch.stake.split(slash_amount), ctx);
+            transfer::public_transfer(slashed, sender);
+            event::emit(StakeSlashed {
+                batch_id: object::uid_to_address(&batch.id),
+                regulator: sender,
+                amount: slash_amount,
+                slashed_at_ms: now,
+            });
+        };
     };
+}
+
+/// What fraction (as a whole-number percent, 0-100) of a batch's stake
+/// `place_hold` slashes for a given severity/category combination. Only
+/// Counterfeit findings and Critical findings in general carry a real
+/// financial claim against the manufacturer's collateral; everything else
+/// is 0. Counterfeit itself scales with how urgent the finding is —
+/// Critical is a confirmed stop-sale, Recall is a defined but less urgent
+/// recall, Advisory doesn't slash at all since it's informational. A
+/// Critical hold for a *non*-counterfeit reason (quality defect, cold-chain
+/// breach) still represents real manufacturer fault, just not fraud, so it
+/// slashes at a lower rate than a confirmed counterfeit.
+fun slash_percent(severity: u8, category: u8): u64 {
+    if (category == CATEGORY_COUNTERFEIT) {
+        if (severity == SEVERITY_CRITICAL) { 100 }
+        else if (severity == SEVERITY_RECALL) { 25 }
+        else { 0 }
+    } else if (
+        severity == SEVERITY_CRITICAL
+            && (category == CATEGORY_QUALITY_DEFECT || category == CATEGORY_COLD_CHAIN_BREACH)
+    ) {
+        50
+    } else {
+        0
+    }
 }
 
 /// Report a batch as suspicious — a permissionless public tip, distinct
 /// from a regulator's `place_hold`. Doesn't freeze anything or require any
 /// registry membership; anyone (a customer noticing a mismatched seal, a
-/// pharmacist, a competitor) can leave a note. This is intentionally as
-/// unrestricted as `add_checkpoint`: the goal is making sure a tip reaches
-/// a regulator's attention at all, not gatekeeping who's allowed to raise
-/// one — a real recall often starts with exactly this kind of unverified
-/// public report.
-public entry fun report_suspicion(batch: &Batch, note: vector<u8>, clock: &Clock, ctx: &TxContext) {
+/// pharmacist, a competitor) can leave a note. Requires a nonzero `bond`
+/// (any amount — there's no fixed minimum) so the public report feed
+/// can't be flooded for free; the bond is refunded via `confirm_suspicion`
+/// if a regulator later judges the report legitimate, or forfeited to the
+/// regulator via `reject_suspicion` if it's spam or unfounded.
+public entry fun report_suspicion(
+    batch: &Batch,
+    note: vector<u8>,
+    bond: Coin<SUI>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
     assert!(note.length() > 0, EEmptySuspicionNote);
-    event::emit(SuspicionReported {
-        batch_id: object::uid_to_address(&batch.id),
-        reporter: ctx.sender(),
+    assert!(coin::value(&bond) > 0, EZeroBond);
+
+    let batch_id = object::uid_to_address(&batch.id);
+    let reporter = ctx.sender();
+    let now = clock.timestamp_ms();
+    let bond_amount = coin::value(&bond);
+
+    let report = SuspicionReport {
+        id: object::new(ctx),
+        batch_id,
+        reporter,
         note: string::utf8(note),
-        reported_at_ms: clock.timestamp_ms(),
+        reported_at_ms: now,
+        bond: coin::into_balance(bond),
+    };
+
+    event::emit(SuspicionReported {
+        report_id: object::uid_to_address(&report.id),
+        batch_id,
+        reporter,
+        note: report.note,
+        bond_amount,
+        reported_at_ms: now,
+    });
+
+    transfer::share_object(report);
+}
+
+/// A listed regulator judges a suspicion report legitimate — refunds the
+/// reporter's bond in full and consumes the report object. Doesn't place a
+/// hold by itself; a regulator who's convinced should call `place_hold`
+/// separately, since confirming a tip and freezing a batch are different
+/// actions with different consequences.
+public entry fun confirm_suspicion(
+    report: SuspicionReport,
+    registry: &RegulatorRegistry,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(registry.regulators.contains(&ctx.sender()), ENotRegulator);
+
+    let SuspicionReport { id, batch_id, reporter, note: _, reported_at_ms: _, bond } = report;
+    let report_id = object::uid_to_address(&id);
+    let refund = coin::from_balance(bond, ctx);
+    transfer::public_transfer(refund, reporter);
+    object::delete(id);
+
+    event::emit(SuspicionConfirmed {
+        report_id,
+        batch_id,
+        confirmed_by: ctx.sender(),
+        confirmed_at_ms: clock.timestamp_ms(),
+    });
+}
+
+/// A listed regulator judges a suspicion report spam or unfounded —
+/// forfeits the bond to the regulator (compensating the time spent
+/// reviewing a report that didn't pan out) and consumes the report object.
+public entry fun reject_suspicion(
+    report: SuspicionReport,
+    registry: &RegulatorRegistry,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(registry.regulators.contains(&ctx.sender()), ENotRegulator);
+
+    let SuspicionReport { id, batch_id, reporter: _, note: _, reported_at_ms: _, bond } = report;
+    let report_id = object::uid_to_address(&id);
+    let forfeited = coin::from_balance(bond, ctx);
+    transfer::public_transfer(forfeited, ctx.sender());
+    object::delete(id);
+
+    event::emit(SuspicionRejected {
+        report_id,
+        batch_id,
+        rejected_by: ctx.sender(),
+        rejected_at_ms: clock.timestamp_ms(),
     });
 }
 
@@ -1010,7 +1241,10 @@ fun finish_release(
 
 /// Onboard another regulator by adding their address to the registry.
 /// Caller must be a listed admin in `AdminRegistry` — trust chains back to
-/// an existing admin, there is no way to self-add to the registry.
+/// an existing admin, there is no way to self-add to the registry. Only
+/// callable directly while `AdminRegistry` has exactly one admin — once a
+/// second exists, this must go through `propose_admin_action` +
+/// `confirm_admin_action` instead. See `AdminRegistry`'s doc comment.
 public entry fun admin_add_regulator(
     admin_registry: &AdminRegistry,
     registry: &mut RegulatorRegistry,
@@ -1018,6 +1252,7 @@ public entry fun admin_add_regulator(
     ctx: &TxContext,
 ) {
     assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
     assert!(!registry.regulators.contains(&addr), EAlreadyRegulator);
     registry.regulators.insert(addr);
 }
@@ -1026,7 +1261,8 @@ public entry fun admin_add_regulator(
 /// registry. This is the entire point of the allow-list design over a
 /// bearer capability object: a compromised key or an ex-employee's access
 /// can actually be cut off, not just superseded by minting more caps
-/// while the old one remains forever valid.
+/// while the old one remains forever valid. Single-admin only — see
+/// `admin_add_regulator`'s doc comment.
 public entry fun admin_revoke_regulator(
     admin_registry: &AdminRegistry,
     registry: &mut RegulatorRegistry,
@@ -1034,13 +1270,15 @@ public entry fun admin_revoke_regulator(
     ctx: &TxContext,
 ) {
     assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
     assert!(registry.regulators.contains(&addr), ENotCurrentRegulator);
     registry.regulators.remove(&addr);
 }
 
 /// Onboard a manufacturer by adding their address to `ManufacturerRegistry`.
 /// Same `AdminRegistry` as the regulator registry — one admin role governs
-/// both allow-lists in this MVP.
+/// all three allow-lists in this MVP. Single-admin only — see
+/// `admin_add_regulator`'s doc comment.
 public entry fun admin_add_manufacturer(
     admin_registry: &AdminRegistry,
     registry: &mut ManufacturerRegistry,
@@ -1048,6 +1286,7 @@ public entry fun admin_add_manufacturer(
     ctx: &TxContext,
 ) {
     assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
     assert!(!registry.manufacturers.contains(&addr), EAlreadyManufacturer);
     registry.manufacturers.insert(addr);
 }
@@ -1055,7 +1294,8 @@ public entry fun admin_add_manufacturer(
 /// Revoke a manufacturer's ability to register new batches. Existing
 /// batches they've already created are unaffected — this only gates
 /// future `create_batch` calls, the same way revoking a regulator doesn't
-/// undo holds they already placed.
+/// undo holds they already placed. Single-admin only — see
+/// `admin_add_regulator`'s doc comment.
 public entry fun admin_revoke_manufacturer(
     admin_registry: &AdminRegistry,
     registry: &mut ManufacturerRegistry,
@@ -1063,15 +1303,49 @@ public entry fun admin_revoke_manufacturer(
     ctx: &TxContext,
 ) {
     assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
     assert!(registry.manufacturers.contains(&addr), ENotCurrentManufacturer);
     registry.manufacturers.remove(&addr);
+}
+
+/// Onboard a pharmacy by adding their address to `PharmacyRegistry`. Same
+/// pattern as manufacturer/regulator. Single-admin only — see
+/// `admin_add_regulator`'s doc comment.
+public entry fun admin_add_pharmacy(
+    admin_registry: &AdminRegistry,
+    registry: &mut PharmacyRegistry,
+    addr: address,
+    ctx: &TxContext,
+) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
+    assert!(!registry.pharmacies.contains(&addr), EAlreadyPharmacy);
+    registry.pharmacies.insert(addr);
+}
+
+/// Revoke a pharmacy's ability to mint sale QRs. Single-admin only — see
+/// `admin_add_regulator`'s doc comment.
+public entry fun admin_revoke_pharmacy(
+    admin_registry: &AdminRegistry,
+    registry: &mut PharmacyRegistry,
+    addr: address,
+    ctx: &TxContext,
+) {
+    assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
+    assert!(registry.pharmacies.contains(&addr), ENotCurrentPharmacy);
+    registry.pharmacies.remove(&addr);
 }
 
 /// Add a backup/additional admin to `AdminRegistry`. Caller must already
 /// be a listed admin — same trust-chains-back-to-an-existing-member
 /// pattern as onboarding a regulator or manufacturer. Seeding a second
 /// admin right after publish is exactly what closes the single-point-of-
-/// failure gap a lone bearer `AdminCap` used to have.
+/// failure gap a lone bearer `AdminCap` used to have — and is itself the
+/// one admin action always reachable directly, single-signer, even once
+/// other admins exist (there'd be no way to ever add a third admin
+/// otherwise, since adding one is a precondition for the propose/confirm
+/// path to make sense at all — see `propose_admin_action`).
 public entry fun admin_add_admin(
     admin_registry: &mut AdminRegistry,
     addr: address,
@@ -1086,15 +1360,108 @@ public entry fun admin_add_admin(
 /// Refuses to remove the very last remaining admin — doing so would
 /// recreate exactly the unrecoverable lockout this allow-list design
 /// exists to avoid, just with an empty set instead of a lost object.
+/// Single-admin only — see `admin_add_regulator`'s doc comment; once a
+/// second admin exists, removing one goes through `propose_admin_action` +
+/// `confirm_admin_action` instead, since removing an admin is exactly the
+/// kind of sensitive action a lone signer shouldn't decide unilaterally
+/// once there's someone else around to check it.
 public entry fun admin_remove_admin(
     admin_registry: &mut AdminRegistry,
     addr: address,
     ctx: &TxContext,
 ) {
     assert!(admin_registry.admins.contains(&ctx.sender()), ENotAdmin);
+    assert!(admin_registry.admins.length() == 1, EAdminActionRequiresProposal);
     assert!(admin_registry.admins.contains(&addr), ENotCurrentAdmin);
     assert!(admin_registry.admins.length() > 1, ECannotRemoveLastAdmin);
     admin_registry.admins.remove(&addr);
+}
+
+/// First signature of a sensitive admin action once `AdminRegistry` has
+/// more than one admin — see the struct's doc comment for when this is
+/// required vs. the direct `admin_*` functions above working immediately.
+/// `action_kind` is one of the `ADMIN_ACTION_*` constants; `target_addr`
+/// is the address being added/revoked. Does NOT take effect yet —
+/// `confirm_admin_action` still has to happen, from a different admin.
+public entry fun propose_admin_action(
+    admin_registry: &mut AdminRegistry,
+    action_kind: u8,
+    target_addr: address,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let sender = ctx.sender();
+    assert!(admin_registry.admins.contains(&sender), ENotAdmin);
+    assert!(
+        action_kind >= ADMIN_ACTION_ADD_REGULATOR && action_kind <= ADMIN_ACTION_REMOVE_ADMIN,
+        EInvalidAdminActionKind,
+    );
+    assert!(admin_registry.pending_action.is_none(), EAdminActionAlreadyProposed);
+
+    let now = clock.timestamp_ms();
+    admin_registry.pending_action = option::some(PendingAdminAction {
+        action_kind,
+        target_addr,
+        proposed_by: sender,
+        proposed_at_ms: now,
+    });
+
+    event::emit(AdminActionProposed {
+        action_kind,
+        target_addr,
+        proposed_by: sender,
+        proposed_at_ms: now,
+    });
+}
+
+/// Second signature: must come from a listed admin other than whoever
+/// called `propose_admin_action`. Applies the pending action to whichever
+/// registry `action_kind` names — all three target registries are taken
+/// as parameters regardless of which one is actually touched, since Move
+/// needs a fixed set of typed parameters and the action kind is only known
+/// at runtime.
+public entry fun confirm_admin_action(
+    admin_registry: &mut AdminRegistry,
+    regulator_registry: &mut RegulatorRegistry,
+    manufacturer_registry: &mut ManufacturerRegistry,
+    pharmacy_registry: &mut PharmacyRegistry,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let sender = ctx.sender();
+    assert!(admin_registry.admins.contains(&sender), ENotAdmin);
+    assert!(admin_registry.pending_action.is_some(), ENoAdminActionProposed);
+
+    let pending = admin_registry.pending_action.extract();
+    assert!(sender != pending.proposed_by, ESameAdminCannotConfirmAction);
+
+    if (pending.action_kind == ADMIN_ACTION_ADD_REGULATOR) {
+        regulator_registry.regulators.insert(pending.target_addr);
+    } else if (pending.action_kind == ADMIN_ACTION_REVOKE_REGULATOR) {
+        regulator_registry.regulators.remove(&pending.target_addr);
+    } else if (pending.action_kind == ADMIN_ACTION_ADD_MANUFACTURER) {
+        manufacturer_registry.manufacturers.insert(pending.target_addr);
+    } else if (pending.action_kind == ADMIN_ACTION_REVOKE_MANUFACTURER) {
+        manufacturer_registry.manufacturers.remove(&pending.target_addr);
+    } else if (pending.action_kind == ADMIN_ACTION_ADD_PHARMACY) {
+        pharmacy_registry.pharmacies.insert(pending.target_addr);
+    } else if (pending.action_kind == ADMIN_ACTION_REVOKE_PHARMACY) {
+        pharmacy_registry.pharmacies.remove(&pending.target_addr);
+    } else if (pending.action_kind == ADMIN_ACTION_ADD_ADMIN) {
+        admin_registry.admins.insert(pending.target_addr);
+    } else {
+        // ADMIN_ACTION_REMOVE_ADMIN
+        assert!(admin_registry.admins.length() > 1, ECannotRemoveLastAdmin);
+        admin_registry.admins.remove(&pending.target_addr);
+    };
+
+    event::emit(AdminActionConfirmed {
+        action_kind: pending.action_kind,
+        target_addr: pending.target_addr,
+        proposed_by: pending.proposed_by,
+        confirmed_by: sender,
+        confirmed_at_ms: clock.timestamp_ms(),
+    });
 }
 
 // ===== Read-only accessors =====
@@ -1229,6 +1596,55 @@ public fun admins(registry: &AdminRegistry): vector<address> {
     *registry.admins.keys()
 }
 
+/// Whether `AdminRegistry` currently has a pending action awaiting a
+/// second admin's confirmation via `confirm_admin_action`.
+public fun has_pending_admin_action(registry: &AdminRegistry): bool {
+    registry.pending_action.is_some()
+}
+
+public fun pending_admin_action_kind(registry: &AdminRegistry): Option<u8> {
+    if (registry.pending_action.is_some()) {
+        option::some(registry.pending_action.borrow().action_kind)
+    } else {
+        option::none()
+    }
+}
+
+public fun pending_admin_action_target(registry: &AdminRegistry): Option<address> {
+    if (registry.pending_action.is_some()) {
+        option::some(registry.pending_action.borrow().target_addr)
+    } else {
+        option::none()
+    }
+}
+
+public fun pending_admin_action_proposed_by(registry: &AdminRegistry): Option<address> {
+    if (registry.pending_action.is_some()) {
+        option::some(registry.pending_action.borrow().proposed_by)
+    } else {
+        option::none()
+    }
+}
+
+/// The `action_kind` values `propose_admin_action`/`confirm_admin_action`
+/// expect — exposed so callers (tests, the frontend) don't have to
+/// hardcode them.
+public fun admin_action_add_regulator(): u8 { ADMIN_ACTION_ADD_REGULATOR }
+
+public fun admin_action_revoke_regulator(): u8 { ADMIN_ACTION_REVOKE_REGULATOR }
+
+public fun admin_action_add_manufacturer(): u8 { ADMIN_ACTION_ADD_MANUFACTURER }
+
+public fun admin_action_revoke_manufacturer(): u8 { ADMIN_ACTION_REVOKE_MANUFACTURER }
+
+public fun admin_action_add_pharmacy(): u8 { ADMIN_ACTION_ADD_PHARMACY }
+
+public fun admin_action_revoke_pharmacy(): u8 { ADMIN_ACTION_REVOKE_PHARMACY }
+
+public fun admin_action_add_admin(): u8 { ADMIN_ACTION_ADD_ADMIN }
+
+public fun admin_action_remove_admin(): u8 { ADMIN_ACTION_REMOVE_ADMIN }
+
 public fun is_regulator(registry: &RegulatorRegistry, addr: address): bool {
     registry.regulators.contains(&addr)
 }
@@ -1246,6 +1662,22 @@ public fun is_manufacturer(registry: &ManufacturerRegistry, addr: address): bool
 public fun manufacturers(registry: &ManufacturerRegistry): vector<address> {
     *registry.manufacturers.keys()
 }
+
+public fun is_pharmacy(registry: &PharmacyRegistry, addr: address): bool {
+    registry.pharmacies.contains(&addr)
+}
+
+public fun pharmacies(registry: &PharmacyRegistry): vector<address> {
+    *registry.pharmacies.keys()
+}
+
+public fun stake_slash_percent(severity: u8, category: u8): u64 { slash_percent(severity, category) }
+
+public fun suspicion_report_reporter(report: &SuspicionReport): address { report.reporter }
+
+public fun suspicion_report_note(report: &SuspicionReport): String { report.note }
+
+public fun suspicion_report_bond_amount(report: &SuspicionReport): u64 { report.bond.value() }
 
 public fun unit_batch_id(unit: &Unit): address { unit.batch_id }
 

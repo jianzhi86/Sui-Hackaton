@@ -17,6 +17,7 @@ import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
 import { RegistryAdminPanel } from './RegistryAdminPanel';
 import { AdminRegistryPanel } from './AdminRegistryPanel';
+import { AdminActionPanel } from './AdminActionPanel';
 import { explorerTxUrl } from '../lib/explorer';
 
 interface CreatedObjectChange {
@@ -209,6 +210,7 @@ export function RegisterBatchForm() {
         />
       )}
       {isAdmin && <AdminRegistryPanel onChanged={refetchAdmin} />}
+      {isAdmin && <AdminActionPanel onChanged={refetchAdmin} />}
 
       {createdBatchId && verifyUrl && (
         <div style={{ marginTop: 24 }}>

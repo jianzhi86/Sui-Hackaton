@@ -2,13 +2,21 @@ import { useState, type FormEvent } from 'react';
 import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
+import {
+  ADMIN_REGISTRY_OBJECT_ID,
+  CLOCK_OBJECT_ID,
+  DEFAULT_NETWORK,
+  PHARMACY_REGISTRY_OBJECT_ID,
+  target,
+} from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
+import { useIsListed } from '../lib/registry';
 import { parseBatchObject } from '../lib/suiRead';
 import { useToast } from '../lib/toast';
 import { generateSecret, sha256Bytes } from '../lib/secret';
 import { QrCodeCard } from './QrCodeCard';
 import { CodeChip } from './CodeChip';
+import { RegistryAdminPanel } from './RegistryAdminPanel';
 
 interface CreatedObjectChange {
   type: string;
@@ -20,6 +28,11 @@ export function MintUnitForm() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
+  const { isListed: isPharmacy, isLoading: pharmacyLoading } = useIsListed(
+    PHARMACY_REGISTRY_OBJECT_ID,
+    'pharmacies',
+  );
+  const { isListed: isAdmin, refetch: refetchAdmin } = useIsListed(ADMIN_REGISTRY_OBJECT_ID, 'admins');
 
   const [batchId, setBatchId] = useState('');
   const [priceSui, setPriceSui] = useState('');
@@ -73,6 +86,7 @@ export function MintUnitForm() {
     tx.moveCall({
       target: target('mint_unit'),
       arguments: [
+        tx.object(PHARMACY_REGISTRY_OBJECT_ID),
         tx.object(batchId.trim()),
         tx.pure.u64(priceMist),
         tx.pure.vector('u8', secretHashBytes),
@@ -113,14 +127,23 @@ export function MintUnitForm() {
       <h2>Create a single-use sale QR</h2>
       <p className="panel-intro">
         Mints one on-chain <span className="code-chip">Unit</span> tied to a batch, priced in SUI.
-        Generate this at the register, right as the customer is checking out — it expires 10
-        minutes after minting, so don't pre-print it onto packaging or show it to anyone before
-        they're ready to pay. It also comes with a one-time scratch code that must be given to the
-        buyer separately from the QR — the QR alone (just an object ID) can be photographed and
-        cloned like any barcode, but a clone without the matching code can't be redeemed.
+        Only addresses listed in the pharmacy registry can do this — otherwise "pharmacy" would
+        just be a self-declared label anyone could type, the same gap the manufacturer/regulator
+        registries already close. Generate this at the register, right as the customer is checking
+        out — it expires 10 minutes after minting, so don't pre-print it onto packaging or show it
+        to anyone before they're ready to pay. It also comes with a one-time scratch code that must
+        be given to the buyer separately from the QR — the QR alone (just an object ID) can be
+        photographed and cloned like any barcode, but a clone without the matching code can't be
+        redeemed.
       </p>
 
       {!account && <p className="error-text">Connect a wallet to mint a sale QR.</p>}
+      {account && !pharmacyLoading && !isPharmacy && (
+        <p className="error-text">
+          Your connected wallet is not a listed pharmacy, so it cannot mint sale QRs. Ask an admin
+          to add your address to the pharmacy registry.
+        </p>
+      )}
       {error && <p className="error-text">{error}</p>}
       {batch?.isHeld && (
         <p className="error-text">
@@ -144,7 +167,7 @@ export function MintUnitForm() {
               value={batchId}
               onChange={(e) => setBatchId(e.target.value)}
               placeholder="0x… (from the batch's registration)"
-              disabled={!account || isPending}
+              disabled={!account || !isPharmacy || isPending}
             />
           </div>
           <div className="field">
@@ -157,7 +180,7 @@ export function MintUnitForm() {
               value={priceSui}
               onChange={(e) => setPriceSui(e.target.value)}
               placeholder="e.g. 5"
-              disabled={!account || isPending}
+              disabled={!account || !isPharmacy || isPending}
             />
           </div>
         </div>
@@ -165,11 +188,28 @@ export function MintUnitForm() {
         <button
           type="submit"
           className="btn btn-primary"
-          disabled={!account || isPending || Boolean(batch?.isHeld) || Boolean(batch && batch.expiryMs <= Date.now())}
+          disabled={
+            !account ||
+            !isPharmacy ||
+            isPending ||
+            Boolean(batch?.isHeld) ||
+            Boolean(batch && batch.expiryMs <= Date.now())
+          }
         >
           {isPending ? 'Minting on-chain…' : 'Mint single-use QR'}
         </button>
       </form>
+
+      {isAdmin && (
+        <RegistryAdminPanel
+          adminRegistryId={ADMIN_REGISTRY_OBJECT_ID}
+          registryObjectId={PHARMACY_REGISTRY_OBJECT_ID}
+          addFn="admin_add_pharmacy"
+          revokeFn="admin_revoke_pharmacy"
+          roleLabel="pharmacy"
+          onChanged={refetchAdmin}
+        />
+      )}
 
       {createdUnitId && payUrl && createdSecret && (
         <div style={{ marginTop: 24 }}>

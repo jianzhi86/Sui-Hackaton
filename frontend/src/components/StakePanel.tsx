@@ -53,9 +53,10 @@ export function StakePanel({ batch, onChanged }: StakePanelProps) {
     <div className="hold-banner" style={{ marginTop: 16 }}>
       <strong>Manufacturer stake: {stakeSui} SUI locked</strong>
       <p className="helper-text" style={{ marginTop: 4 }}>
-        Posted at registration as collateral. If a regulator places a Critical + Counterfeit hold
-        on this batch, this is paid out to them as a bounty. Otherwise it's reclaimable by the
-        manufacturer once the batch expires.
+        Posted at registration as collateral. A Critical + Counterfeit hold slashes it in full to
+        the regulator as a bounty; a Critical Quality Defect or Cold-Chain Breach hold slashes 50%;
+        a Recall + Counterfeit hold slashes 25%. Otherwise it's reclaimable by the manufacturer once
+        the batch expires.
       </p>
       {isManufacturer && (
         <>

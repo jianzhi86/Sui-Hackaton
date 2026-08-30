@@ -62,6 +62,16 @@ export const MANUFACTURER_REGISTRY_OBJECT_ID =
  */
 export const ADMIN_REGISTRY_OBJECT_ID = import.meta.env.VITE_ADMIN_REGISTRY_OBJECT_ID || '0x0';
 
+/**
+ * Object ID of the shared `PharmacyRegistry`, created once at publish time
+ * alongside the other three registries. Gates `mint_unit` — without it,
+ * "pharmacy" wasn't a vetted role anywhere, unlike manufacturer/regulator.
+ * Copy it from the same publish output ("Created Objects" — the one with
+ * type `...::batch::PharmacyRegistry`) into `.env` as
+ * `VITE_PHARMACY_REGISTRY_OBJECT_ID`.
+ */
+export const PHARMACY_REGISTRY_OBJECT_ID = import.meta.env.VITE_PHARMACY_REGISTRY_OBJECT_ID || '0x0';
+
 export const MODULE_NAME = 'batch';
 
 /** Sui's shared Clock object always lives at this fixed address. */
