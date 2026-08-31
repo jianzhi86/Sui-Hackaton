@@ -78,6 +78,14 @@ export const MODULE_NAME = 'batch';
 export const CLOCK_OBJECT_ID = '0x6';
 
 /**
+ * Minimum bond (MIST) `report_suspicion` will accept. Must match
+ * `MIN_SUSPICION_BOND` in `pharma_track.move` — kept here too so the UI
+ * can validate before ever building a transaction instead of only finding
+ * out on-chain abort.
+ */
+export const MIN_SUSPICION_BOND_MIST = 10_000_000;
+
+/**
  * How long a `Unit` stays redeemable after minting, in milliseconds. Must
  * match `UNIT_EXPIRY_MS` in `pharma_track.move` — kept here too so the UI
  * can show a countdown and disable payment locally instead of waiting for

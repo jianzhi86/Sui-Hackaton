@@ -1,14 +1,35 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Header } from './components/Header';
 import { RegisterBatchForm } from './components/RegisterBatchForm';
-import { CheckpointScanner } from './components/CheckpointScanner';
-import { BatchLookup } from './components/BatchLookup';
-import { MintUnitForm } from './components/MintUnitForm';
-import { PurchaseUnitScanner } from './components/PurchaseUnitScanner';
-import { ActiveHoldsDashboard } from './components/ActiveHoldsDashboard';
-import { StatsDashboard } from './components/StatsDashboard';
+
+// Code-split every tab except the default ("register") one — each pulls
+// in dependencies (html5-qrcode for scanning, the Gonka/cross-batch AI
+// logic, the Stats/Active-Holds event aggregation) that only matter once
+// someone actually opens that tab, so there's no reason to ship them in
+// the initial bundle every visitor downloads regardless of which tab (if
+// any) they end up using.
+const CheckpointScanner = lazy(() =>
+  import('./components/CheckpointScanner').then((m) => ({ default: m.CheckpointScanner })),
+);
+const BatchLookup = lazy(() => import('./components/BatchLookup').then((m) => ({ default: m.BatchLookup })));
+const MintUnitForm = lazy(() => import('./components/MintUnitForm').then((m) => ({ default: m.MintUnitForm })));
+const PurchaseUnitScanner = lazy(() =>
+  import('./components/PurchaseUnitScanner').then((m) => ({ default: m.PurchaseUnitScanner })),
+);
+const ActiveHoldsDashboard = lazy(() =>
+  import('./components/ActiveHoldsDashboard').then((m) => ({ default: m.ActiveHoldsDashboard })),
+);
+const StatsDashboard = lazy(() => import('./components/StatsDashboard').then((m) => ({ default: m.StatsDashboard })));
 
 export type Tab = 'register' | 'scan' | 'verify' | 'mint' | 'pay' | 'holds' | 'stats';
+
+function TabFallback() {
+  return (
+    <section className="panel">
+      <p className="helper-text">Loading…</p>
+    </section>
+  );
+}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('register');
@@ -46,12 +67,14 @@ export default function App() {
     <div className="app-shell">
       <Header active={tab} onNavigate={setTab} />
       {tab === 'register' && <RegisterBatchForm />}
-      {tab === 'scan' && <CheckpointScanner />}
-      {tab === 'verify' && <BatchLookup initialBatchId={initialBatchId} initialSerial={initialSerial} />}
-      {tab === 'mint' && <MintUnitForm />}
-      {tab === 'pay' && <PurchaseUnitScanner initialUnitId={initialUnitId} />}
-      {tab === 'holds' && <ActiveHoldsDashboard onSelectBatch={handleSelectBatchFromHolds} />}
-      {tab === 'stats' && <StatsDashboard />}
+      <Suspense fallback={<TabFallback />}>
+        {tab === 'scan' && <CheckpointScanner />}
+        {tab === 'verify' && <BatchLookup initialBatchId={initialBatchId} initialSerial={initialSerial} />}
+        {tab === 'mint' && <MintUnitForm />}
+        {tab === 'pay' && <PurchaseUnitScanner initialUnitId={initialUnitId} />}
+        {tab === 'holds' && <ActiveHoldsDashboard onSelectBatch={handleSelectBatchFromHolds} />}
+        {tab === 'stats' && <StatsDashboard />}
+      </Suspense>
     </div>
   );
 }

@@ -3,7 +3,14 @@ import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
 import { Transaction } from '@mysten/sui/transactions';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, PACKAGE_ID, REGISTRY_OBJECT_ID, target } from '../lib/network';
+import {
+  CLOCK_OBJECT_ID,
+  DEFAULT_NETWORK,
+  MIN_SUSPICION_BOND_MIST,
+  PACKAGE_ID,
+  REGISTRY_OBJECT_ID,
+  target,
+} from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useIsListed } from '../lib/registry';
 import { useToast } from '../lib/toast';
@@ -91,11 +98,13 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
       return;
     }
     const bondNum = Number(bondSui);
-    if (!bondSui.trim() || !Number.isFinite(bondNum) || bondNum <= 0) {
-      setError('A positive bond amount is required — it discourages flooding the report feed for free.');
+    const bondMist = BigInt(Math.round(bondNum * Number(MIST_PER_SUI)));
+    if (!bondSui.trim() || !Number.isFinite(bondNum) || bondMist < BigInt(MIN_SUSPICION_BOND_MIST)) {
+      setError(
+        `A bond of at least ${MIN_SUSPICION_BOND_MIST / Number(MIST_PER_SUI)} SUI is required — it discourages flooding the report feed for free.`,
+      );
       return;
     }
-    const bondMist = BigInt(Math.round(bondNum * Number(MIST_PER_SUI)));
 
     const tx = new Transaction();
     const [bondCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(bondMist)]);
@@ -157,9 +166,9 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
     <div className="hold-banner" style={{ marginTop: 16 }}>
       <strong>Report this batch as suspicious</strong>
       <p className="helper-text" style={{ marginTop: 4 }}>
-        Anyone can leave a tip for a small bonded amount of SUI — no wallet allow-listing required.
-        This doesn't freeze anything by itself; it's a public signal a regulator can confirm (bond
-        refunded) or reject (bond forfeited to them) as spam.
+        Anyone can leave a tip for a bonded amount of at least {MIN_SUSPICION_BOND_MIST / Number(MIST_PER_SUI)} SUI
+        — no wallet allow-listing required. This doesn't freeze anything by itself; it's a public
+        signal a regulator can confirm (bond refunded) or reject (bond forfeited to them) as spam.
       </p>
       {error && <p className="error-text">{error}</p>}
 
@@ -179,7 +188,7 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
           <input
             id="bondSui"
             type="number"
-            min="0"
+            min={MIN_SUSPICION_BOND_MIST / Number(MIST_PER_SUI)}
             step="0.01"
             value={bondSui}
             onChange={(e) => setBondSui(e.target.value)}

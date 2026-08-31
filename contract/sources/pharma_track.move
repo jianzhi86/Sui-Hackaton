@@ -543,7 +543,7 @@ const EStakeAlreadyEmpty: u64 = 36;
 const ENotPharmacy: u64 = 37;
 const EAlreadyPharmacy: u64 = 38;
 const ENotCurrentPharmacy: u64 = 39;
-const EZeroBond: u64 = 40;
+const EBondTooSmall: u64 = 40;
 const EAdminActionRequiresProposal: u64 = 41;
 const EAdminActionAlreadyProposed: u64 = 42;
 const ENoAdminActionProposed: u64 = 43;
@@ -606,6 +606,13 @@ const TEMPERATURE_OFFSET_C: u64 = 200;
 /// sanity check on the input shape, not a guarantee the hash was computed
 /// correctly.
 const SECRET_HASH_LENGTH: u64 = 32;
+
+/// Minimum bond `report_suspicion` will accept, in MIST (0.01 SUI). A bond
+/// of any positive size technically deters *free* spam, but a 1-MIST bond
+/// is spam with extra steps — this floor is what makes the deterrent a
+/// real cost rather than a symbolic one, while staying low enough that a
+/// genuine tip isn't priced out.
+const MIN_SUSPICION_BOND: u64 = 10_000_000;
 
 /// How long a hold of each severity can sit unaddressed before
 /// `escalate_stale_hold` will accept flagging it as overdue — 1 day for
@@ -960,11 +967,13 @@ fun slash_percent(severity: u8, category: u8): u64 {
 /// Report a batch as suspicious — a permissionless public tip, distinct
 /// from a regulator's `place_hold`. Doesn't freeze anything or require any
 /// registry membership; anyone (a customer noticing a mismatched seal, a
-/// pharmacist, a competitor) can leave a note. Requires a nonzero `bond`
-/// (any amount — there's no fixed minimum) so the public report feed
-/// can't be flooded for free; the bond is refunded via `confirm_suspicion`
-/// if a regulator later judges the report legitimate, or forfeited to the
-/// regulator via `reject_suspicion` if it's spam or unfounded.
+/// pharmacist, a competitor) can leave a note. Requires a `bond` of at
+/// least `MIN_SUSPICION_BOND` so the public report feed can't be flooded
+/// for free — a bond of any positive size is technically nonzero, but a
+/// 1-MIST bond is spam with extra steps, not a real deterrent. The bond is
+/// refunded via `confirm_suspicion` if a regulator later judges the report
+/// legitimate, or forfeited to the regulator via `reject_suspicion` if
+/// it's spam or unfounded.
 public entry fun report_suspicion(
     batch: &Batch,
     note: vector<u8>,
@@ -973,7 +982,7 @@ public entry fun report_suspicion(
     ctx: &mut TxContext,
 ) {
     assert!(note.length() > 0, EEmptySuspicionNote);
-    assert!(coin::value(&bond) > 0, EZeroBond);
+    assert!(coin::value(&bond) >= MIN_SUSPICION_BOND, EBondTooSmall);
 
     let batch_id = object::uid_to_address(&batch.id);
     let reporter = ctx.sender();
@@ -1678,6 +1687,10 @@ public fun suspicion_report_reporter(report: &SuspicionReport): address { report
 public fun suspicion_report_note(report: &SuspicionReport): String { report.note }
 
 public fun suspicion_report_bond_amount(report: &SuspicionReport): u64 { report.bond.value() }
+
+/// The minimum bond `report_suspicion` will accept, in MIST — exposed so
+/// callers (tests, the frontend) don't have to hardcode it.
+public fun min_suspicion_bond(): u64 { MIN_SUSPICION_BOND }
 
 public fun unit_batch_id(unit: &Unit): address { unit.batch_id }
 

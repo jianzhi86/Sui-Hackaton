@@ -1861,7 +1861,7 @@ fun test_report_suspicion_does_not_change_batch_state() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        let bond = coin::mint_for_testing<SUI>(10, ctx);
+        let bond = coin::mint_for_testing<SUI>(batch::min_suspicion_bond(), ctx);
         batch::report_suspicion(&shared_batch, b"Seal looked tampered with", bond, &clock, ctx);
         assert!(!batch::is_held(&shared_batch), 0);
         clock.destroy_for_testing();
@@ -1872,7 +1872,7 @@ fun test_report_suspicion_does_not_change_batch_state() {
     {
         let report = scenario.take_shared<SuspicionReport>();
         assert!(batch::suspicion_report_reporter(&report) == CUSTOMER, 1);
-        assert!(batch::suspicion_report_bond_amount(&report) == 10, 2);
+        assert!(batch::suspicion_report_bond_amount(&report) == batch::min_suspicion_bond(), 2);
         test_scenario::return_shared(report);
     };
 
@@ -1890,8 +1890,30 @@ fun test_report_suspicion_rejects_empty_note() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        let bond = coin::mint_for_testing<SUI>(10, ctx);
+        let bond = coin::mint_for_testing<SUI>(batch::min_suspicion_bond(), ctx);
         batch::report_suspicion(&shared_batch, b"", bond, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 40 == batch::EBondTooSmall.
+#[test, expected_failure(abort_code = 40)]
+fun test_report_suspicion_rejects_bond_below_minimum() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_batch_with_registry(&mut scenario, b"BATCH-2026-047");
+
+    scenario.next_tx(CUSTOMER);
+    {
+        let shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        // One MIST below the minimum — a bond that's technically nonzero
+        // but not large enough to be a real deterrent.
+        let bond = coin::mint_for_testing<SUI>(batch::min_suspicion_bond() - 1, ctx);
+        batch::report_suspicion(&shared_batch, b"Trying a tiny bond", bond, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
     };
@@ -2163,7 +2185,7 @@ fun test_confirm_suspicion_refunds_bond_to_reporter() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        let bond = coin::mint_for_testing<SUI>(50, ctx);
+        let bond = coin::mint_for_testing<SUI>(batch::min_suspicion_bond(), ctx);
         batch::report_suspicion(&shared_batch, b"Blister pack colour looked off", bond, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
@@ -2183,7 +2205,7 @@ fun test_confirm_suspicion_refunds_bond_to_reporter() {
     scenario.next_tx(CUSTOMER);
     {
         let refund = scenario.take_from_sender<coin::Coin<SUI>>();
-        assert!(coin::value(&refund) == 50, 0);
+        assert!(coin::value(&refund) == batch::min_suspicion_bond(), 0);
         test_scenario::return_to_sender(&scenario, refund);
     };
 
@@ -2200,7 +2222,7 @@ fun test_reject_suspicion_forfeits_bond_to_regulator() {
         let shared_batch = scenario.take_shared<Batch>();
         let ctx = scenario.ctx();
         let clock = clock::create_for_testing(ctx);
-        let bond = coin::mint_for_testing<SUI>(50, ctx);
+        let bond = coin::mint_for_testing<SUI>(batch::min_suspicion_bond(), ctx);
         batch::report_suspicion(&shared_batch, b"Just seemed off, no real reason", bond, &clock, ctx);
         clock.destroy_for_testing();
         test_scenario::return_shared(shared_batch);
@@ -2220,7 +2242,7 @@ fun test_reject_suspicion_forfeits_bond_to_regulator() {
     scenario.next_tx(MANUFACTURER);
     {
         let forfeited = scenario.take_from_sender<coin::Coin<SUI>>();
-        assert!(coin::value(&forfeited) == 50, 0);
+        assert!(coin::value(&forfeited) == batch::min_suspicion_bond(), 0);
         test_scenario::return_to_sender(&scenario, forfeited);
     };
 
