@@ -411,6 +411,16 @@ public struct StakeWithdrawn has copy, drop {
     withdrawn_at_ms: u64,
 }
 
+/// Emitted by `add_stake` when the manufacturer tops up an existing
+/// batch's collateral after registration.
+public struct StakeAdded has copy, drop {
+    batch_id: address,
+    manufacturer: address,
+    amount: u64,
+    new_total: u64,
+    added_at_ms: u64,
+}
+
 /// Emitted by `propose_admin_action` — the first of the two signatures a
 /// sensitive admin action requires once `AdminRegistry` has more than one
 /// admin. See `AdminRegistry`'s doc comment.
@@ -544,6 +554,7 @@ const ENotPharmacy: u64 = 37;
 const EAlreadyPharmacy: u64 = 38;
 const ENotCurrentPharmacy: u64 = 39;
 const EBondTooSmall: u64 = 40;
+const EZeroStakeTopUp: u64 = 46;
 const EAdminActionRequiresProposal: u64 = 41;
 const EAdminActionAlreadyProposed: u64 = 42;
 const ENoAdminActionProposed: u64 = 43;
@@ -1059,6 +1070,33 @@ public entry fun reject_suspicion(
         batch_id,
         rejected_by: ctx.sender(),
         rejected_at_ms: clock.timestamp_ms(),
+    });
+}
+
+/// Add more collateral to a batch that's already registered — `Batch.stake`
+/// is otherwise fixed at `create_batch` time, with no way to top it up if
+/// circumstances change (e.g. a manufacturer wants to voluntarily post a
+/// larger bond after a competitor incident, or was under-capitalized at
+/// launch). Requires the caller to be this specific batch's manufacturer;
+/// blocked while held or expired, the same as every other stake/sale
+/// action, so a top-up can't be used to make a batch look "freshly
+/// collateralized" mid-investigation.
+public entry fun add_stake(batch: &mut Batch, payment: Coin<SUI>, clock: &Clock, ctx: &TxContext) {
+    let sender = ctx.sender();
+    assert!(sender == batch.manufacturer, ENotBatchManufacturer);
+    assert!(!batch.is_held, EBatchHeld);
+    assert!(clock.timestamp_ms() < batch.expiry_ms, EBatchExpired);
+    let amount = coin::value(&payment);
+    assert!(amount > 0, EZeroStakeTopUp);
+
+    batch.stake.join(coin::into_balance(payment));
+
+    event::emit(StakeAdded {
+        batch_id: object::uid_to_address(&batch.id),
+        manufacturer: sender,
+        amount,
+        new_total: batch.stake.value(),
+        added_at_ms: clock.timestamp_ms(),
     });
 }
 

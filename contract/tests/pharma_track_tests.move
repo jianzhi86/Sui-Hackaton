@@ -2248,3 +2248,116 @@ fun test_reject_suspicion_forfeits_bond_to_regulator() {
 
     scenario.end();
 }
+
+#[test]
+fun test_add_stake_tops_up_existing_collateral() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-048", FAR_FUTURE_MS, 500);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(300, ctx);
+        batch::add_stake(&mut shared_batch, payment, &clock, ctx);
+        assert!(batch::stake_amount(&shared_batch) == 800, 0);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 34 == batch::ENotBatchManufacturer.
+#[test, expected_failure(abort_code = 34)]
+fun test_add_stake_rejects_non_manufacturer() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-049", FAR_FUTURE_MS, 500);
+
+    scenario.next_tx(PHARMACY);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(300, ctx);
+        batch::add_stake(&mut shared_batch, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 46 == batch::EZeroStakeTopUp.
+#[test, expected_failure(abort_code = 46)]
+fun test_add_stake_rejects_zero_payment() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-050", FAR_FUTURE_MS, 500);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        let payment = coin::mint_for_testing<SUI>(0, ctx);
+        batch::add_stake(&mut shared_batch, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 24 == batch::EBatchExpired.
+#[test, expected_failure(abort_code = 24)]
+fun test_add_stake_rejects_after_expiry() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-051", 1_000, 500);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let ctx = scenario.ctx();
+        let mut clock = clock::create_for_testing(ctx);
+        clock.set_for_testing(1_001);
+        let payment = coin::mint_for_testing<SUI>(300, ctx);
+        batch::add_stake(&mut shared_batch, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+    };
+
+    scenario.end();
+}
+
+// abort_code 2 == batch::EBatchHeld.
+#[test, expected_failure(abort_code = 2)]
+fun test_add_stake_rejects_while_held() {
+    let mut scenario = test_scenario::begin(MANUFACTURER);
+    setup_staked_batch(&mut scenario, b"BATCH-2026-052", FAR_FUTURE_MS, 500);
+
+    scenario.next_tx(MANUFACTURER);
+    {
+        let mut shared_batch = scenario.take_shared<Batch>();
+        let registry = scenario.take_shared<RegulatorRegistry>();
+        let ctx = scenario.ctx();
+        let clock = clock::create_for_testing(ctx);
+        batch::place_hold(
+            &registry,
+            &mut shared_batch,
+            b"Investigating",
+            batch::severity_advisory(),
+            batch::category_other(),
+            b"CASE-2026-052",
+            &clock,
+            ctx,
+        );
+        let payment = coin::mint_for_testing<SUI>(300, ctx);
+        batch::add_stake(&mut shared_batch, payment, &clock, ctx);
+        clock.destroy_for_testing();
+        test_scenario::return_shared(shared_batch);
+        test_scenario::return_shared(registry);
+    };
+
+    scenario.end();
+}
