@@ -31,47 +31,6 @@ const RPC_URLS = {
  */
 export const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID || '0x0';
 
-/**
- * Object ID of the shared `RegulatorRegistry`, created once at publish
- * time by `init` — unlike `PACKAGE_ID`, this can't be derived from
- * anything else, since a shared object's ID is only known from the
- * publish transaction's output ("Created Objects" — the one with type
- * `...::batch::RegulatorRegistry`). Copy it into `.env` as
- * `VITE_REGISTRY_OBJECT_ID` alongside `VITE_PACKAGE_ID` after publishing.
- */
-export const REGISTRY_OBJECT_ID = import.meta.env.VITE_REGISTRY_OBJECT_ID || '0x0';
-
-/**
- * Object ID of the shared `ManufacturerRegistry`, created once at publish
- * time alongside `RegulatorRegistry` — same caveat: not derivable from
- * the package ID, copy it from the same publish output ("Created
- * Objects" — the one with type `...::batch::ManufacturerRegistry`) into
- * `.env` as `VITE_MANUFACTURER_REGISTRY_OBJECT_ID`.
- */
-export const MANUFACTURER_REGISTRY_OBJECT_ID =
-  import.meta.env.VITE_MANUFACTURER_REGISTRY_OBJECT_ID || '0x0';
-
-/**
- * Object ID of the shared `AdminRegistry`, created once at publish time
- * alongside the other two registries. Replaces an earlier bearer
- * `AdminCap` object — membership here is checked by address like the
- * regulator/manufacturer registries, not by owning an object, so it needs
- * its own object ID the same way they do. Copy it from the same publish
- * output ("Created Objects" — the one with type `...::batch::AdminRegistry`)
- * into `.env` as `VITE_ADMIN_REGISTRY_OBJECT_ID`.
- */
-export const ADMIN_REGISTRY_OBJECT_ID = import.meta.env.VITE_ADMIN_REGISTRY_OBJECT_ID || '0x0';
-
-/**
- * Object ID of the shared `PharmacyRegistry`, created once at publish time
- * alongside the other three registries. Gates `mint_unit` — without it,
- * "pharmacy" wasn't a vetted role anywhere, unlike manufacturer/regulator.
- * Copy it from the same publish output ("Created Objects" — the one with
- * type `...::batch::PharmacyRegistry`) into `.env` as
- * `VITE_PHARMACY_REGISTRY_OBJECT_ID`.
- */
-export const PHARMACY_REGISTRY_OBJECT_ID = import.meta.env.VITE_PHARMACY_REGISTRY_OBJECT_ID || '0x0';
-
 export const MODULE_NAME = 'batch';
 
 /** Sui's shared Clock object always lives at this fixed address. */

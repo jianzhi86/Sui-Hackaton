@@ -1,12 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { ADMIN_REGISTRY_OBJECT_ID, CLOCK_OBJECT_ID, DEFAULT_NETWORK, REGISTRY_OBJECT_ID, target } from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
-import { useIsListed } from '../lib/registry';
 import { useToast } from '../lib/toast';
 import { CodeChip } from './CodeChip';
-import { RegistryAdminPanel } from './RegistryAdminPanel';
 import { explorerAddressUrl } from '../lib/explorer';
 import {
   CATEGORY_COLD_CHAIN_BREACH,
@@ -107,7 +105,7 @@ interface HoldControlProps {
 }
 
 /**
- * Lets a listed regulator place or release a hold on a batch. `place_hold`
+ * Lets any connected wallet place or release a hold on a batch. `place_hold`
  * freezes the on-chain custody chain: `add_checkpoint` aborts while
  * `is_held` is true, so this isn't just a cosmetic flag.
  */
@@ -115,8 +113,6 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
-  const { isListed: isRegulator, isLoading: regLoading } = useIsListed(REGISTRY_OBJECT_ID, 'regulators');
-  const { isListed: isAdmin, refetch: refetchAdmin } = useIsListed(ADMIN_REGISTRY_OBJECT_ID, 'admins');
   const [reason, setReason] = useState('');
   const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_RECALL);
   const [category, setCategory] = useState<HoldCategory>(CATEGORY_QUALITY_DEFECT);
@@ -142,7 +138,6 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     tx.moveCall({
       target: target('place_hold'),
       arguments: [
-        tx.object(REGISTRY_OBJECT_ID),
         tx.object(batch.objectId),
         tx.pure.string(reason.trim()),
         tx.pure.u8(severity),
@@ -181,7 +176,6 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     tx.moveCall({
       target: target('release_hold'),
       arguments: [
-        tx.object(REGISTRY_OBJECT_ID),
         tx.object(batch.objectId),
         tx.pure.string(releaseNote.trim()),
         tx.object(CLOCK_OBJECT_ID),
@@ -215,7 +209,6 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     tx.moveCall({
       target: target('propose_release'),
       arguments: [
-        tx.object(REGISTRY_OBJECT_ID),
         tx.object(batch.objectId),
         tx.pure.string(releaseNote.trim()),
         tx.object(CLOCK_OBJECT_ID),
@@ -242,7 +235,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     const tx = new Transaction();
     tx.moveCall({
       target: target('confirm_release'),
-      arguments: [tx.object(REGISTRY_OBJECT_ID), tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
+      arguments: [tx.object(batch.objectId), tx.object(CLOCK_OBJECT_ID)],
     });
 
     signAndExecute(
@@ -278,7 +271,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
     );
   }
 
-  const canAct = Boolean(account && isRegulator && !regLoading);
+  const canAct = Boolean(account);
   const isCritical = batch.holdSeverity === SEVERITY_CRITICAL;
   const isProposer = Boolean(account && batch.pendingReleaseBy === account.address);
   const isOverdue =
@@ -427,11 +420,6 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           )}
 
           {!account && <p className="helper-text">Connect a wallet to release this hold.</p>}
-          {account && !regLoading && !isRegulator && (
-            <p className="helper-text">
-              Your connected wallet is not a listed regulator, so it cannot release this hold.
-            </p>
-          )}
         </div>
       ) : (
         <div className="hold-banner">
@@ -491,23 +479,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
               {isPending ? 'Placing hold…' : 'Place hold'}
             </button>
             {!account && <p className="helper-text">Connect a wallet to place a hold.</p>}
-            {account && !regLoading && !isRegulator && (
-              <p className="helper-text">
-                Your connected wallet is not a listed regulator, so it cannot place a hold on this
-                batch. Ask an admin to add your address to the registry.
-              </p>
-            )}
           </form>
-          {isAdmin && (
-            <RegistryAdminPanel
-              adminRegistryId={ADMIN_REGISTRY_OBJECT_ID}
-              registryObjectId={REGISTRY_OBJECT_ID}
-              addFn="admin_add_regulator"
-              revokeFn="admin_revoke_regulator"
-              roleLabel="regulator"
-              onChanged={refetchAdmin}
-            />
-          )}
         </div>
       )}
 

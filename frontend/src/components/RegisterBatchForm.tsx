@@ -2,22 +2,12 @@ import { useState, type FormEvent } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
-import {
-  ADMIN_REGISTRY_OBJECT_ID,
-  CLOCK_OBJECT_ID,
-  DEFAULT_NETWORK,
-  MANUFACTURER_REGISTRY_OBJECT_ID,
-  target,
-} from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
-import { useIsListed } from '../lib/registry';
 import { useToast } from '../lib/toast';
 import { QrCodeCard } from './QrCodeCard';
 import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
-import { RegistryAdminPanel } from './RegistryAdminPanel';
-import { AdminRegistryPanel } from './AdminRegistryPanel';
-import { AdminActionPanel } from './AdminActionPanel';
 import { explorerTxUrl } from '../lib/explorer';
 
 interface CreatedObjectChange {
@@ -39,11 +29,6 @@ export function RegisterBatchForm() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
-  const { isListed: isManufacturer, isLoading: manuLoading } = useIsListed(
-    MANUFACTURER_REGISTRY_OBJECT_ID,
-    'manufacturers',
-  );
-  const { isListed: isAdmin, refetch: refetchAdmin } = useIsListed(ADMIN_REGISTRY_OBJECT_ID, 'admins');
 
   const [batchCode, setBatchCode] = useState('');
   const [productName, setProductName] = useState('');
@@ -53,7 +38,7 @@ export function RegisterBatchForm() {
   const [createdBatchId, setCreatedBatchId] = useState<string | null>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
 
-  const canAct = Boolean(account && isManufacturer && !manuLoading);
+  const canAct = Boolean(account);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -82,7 +67,6 @@ export function RegisterBatchForm() {
     tx.moveCall({
       target: target('create_batch'),
       arguments: [
-        tx.object(MANUFACTURER_REGISTRY_OBJECT_ID),
         tx.pure.string(batchCode.trim()),
         tx.pure.string(productName.trim()),
         tx.pure.u64(expiryMs),
@@ -125,19 +109,13 @@ export function RegisterBatchForm() {
       <h2>Register a new batch</h2>
       <p className="panel-intro">
         Called once by the manufacturer. This creates a shared object on Sui that every later
-        checkpoint — distributor, pharmacy, and so on — will attach to. Only addresses listed in
-        the manufacturer registry can do this — otherwise "manufacturer" would just be a
-        self-declared label anyone could type.
+        checkpoint — distributor, pharmacy, and so on — will attach to. Any connected wallet can
+        register a batch; "manufacturer" is simply whoever signs this transaction, not a vetted
+        claim (see the README for the tradeoff).
       </p>
 
       {!account && <p className="error-text">Connect a wallet to register a batch.</p>}
       {error && <p className="error-text">{error}</p>}
-      {account && !manuLoading && !isManufacturer && (
-        <p className="error-text">
-          Your connected wallet is not a listed manufacturer, so it cannot register a batch. Ask
-          an admin to add your address to the manufacturer registry.
-        </p>
-      )}
 
       <form onSubmit={handleSubmit}>
         <div className="field-row">
@@ -189,28 +167,15 @@ export function RegisterBatchForm() {
           </div>
         </div>
         <p className="helper-text" style={{ marginTop: -8, marginBottom: 16 }}>
-          Locked for this batch's whole shelf life. If a regulator later places a Critical +
-          Counterfeit hold on it, the stake is paid out to them as a bounty; otherwise you can
-          withdraw it back once the batch expires. Leave at 0 to register without staking anything.
+          Locked for this batch's whole shelf life. A hold placed on it later can slash some or
+          all of the stake to whoever placed the hold; otherwise you can withdraw it back once the
+          batch expires. Leave at 0 to register without staking anything.
         </p>
 
         <button type="submit" className="btn btn-primary" disabled={!canAct || isPending}>
           {isPending ? 'Registering on-chain…' : 'Register batch'}
         </button>
       </form>
-
-      {isAdmin && (
-        <RegistryAdminPanel
-          adminRegistryId={ADMIN_REGISTRY_OBJECT_ID}
-          registryObjectId={MANUFACTURER_REGISTRY_OBJECT_ID}
-          addFn="admin_add_manufacturer"
-          revokeFn="admin_revoke_manufacturer"
-          roleLabel="manufacturer"
-          onChanged={refetchAdmin}
-        />
-      )}
-      {isAdmin && <AdminRegistryPanel onChanged={refetchAdmin} />}
-      {isAdmin && <AdminActionPanel onChanged={refetchAdmin} />}
 
       {createdBatchId && verifyUrl && (
         <div style={{ marginTop: 24 }}>
