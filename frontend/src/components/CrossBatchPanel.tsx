@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSuiClient } from '@mysten/dapp-kit';
 import { PACKAGE_ID } from '../lib/network';
 import { fetchAllEvents } from '../lib/activeHolds';
@@ -49,6 +49,17 @@ export function CrossBatchPanel({ batch }: CrossBatchPanelProps) {
   const [checking, setChecking] = useState(false);
   const [siblingCount, setSiblingCount] = useState<number | null>(null);
   const [report, setReport] = useState<AnomalyReportResult | null>(null);
+  const [elapsedS, setElapsedS] = useState(0);
+
+  // Same reasoning as the single-batch check: two full-reasoning model
+  // calls genuinely take 20-40+ seconds, so a plain "Comparing…" label with
+  // no counter reads as frozen well before either model answers.
+  useEffect(() => {
+    if (!checking) return;
+    setElapsedS(0);
+    const id = setInterval(() => setElapsedS((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [checking]);
 
   async function handleCheck() {
     setChecking(true);
@@ -87,12 +98,12 @@ export function CrossBatchPanel({ batch }: CrossBatchPanelProps) {
   return (
     <div style={{ marginTop: 16 }}>
       <button type="button" className="btn btn-secondary" onClick={handleCheck} disabled={checking}>
-        {checking ? 'Comparing across batches…' : "Check this manufacturer's other batches"}
+        {checking ? `Comparing across batches… (${elapsedS}s)` : "Check this manufacturer's other batches"}
       </button>
       <p className="helper-text" style={{ marginTop: 4 }}>
-        Reasons across every batch from the same manufacturer address, however many there are —
-        catches patterns (one actor touching many batches, repeated counterfeit findings)
-        invisible to a single-batch check.
+        {checking
+          ? 'Fetching every batch from this manufacturer and querying 2 independent models — this genuinely takes 20-40+ seconds with full reasoning, it isn\'t stuck.'
+          : 'Reasons across every batch from the same manufacturer address, however many there are — catches patterns (one actor touching many batches, repeated counterfeit findings) invisible to a single-batch check.'}
       </p>
       {siblingCount !== null && (
         <p className="helper-text">Compared {siblingCount} batch(es) from this manufacturer.</p>

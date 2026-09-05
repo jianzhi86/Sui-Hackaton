@@ -23,7 +23,7 @@ interface ActiveHoldsDashboardProps {
 export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProps) {
   const client = useSuiClient();
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['activeHolds', PACKAGE_ID],
     queryFn: async () => {
       const [held, released] = await Promise.all([
@@ -34,17 +34,32 @@ export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProp
     },
   });
 
-  const activeHolds = data ?? [];
+  // Most urgent first — a Critical hold from an hour ago is more actionable
+  // to a regulator scanning this list than an Advisory from yesterday.
+  const activeHolds = [...(data ?? [])].sort(
+    (a, b) => b.severity - a.severity || b.heldAtMs - a.heldAtMs,
+  );
 
   return (
     <section className="panel">
-      <h2>Active Holds &amp; Recalls</h2>
+      <h2>
+        Active Holds &amp; Recalls{activeHolds.length > 0 && ` (${activeHolds.length})`}
+      </h2>
       <p className="panel-intro">
         Every batch currently frozen anywhere in the system — a public recall registry, not a
         per-item lookup tool. Built by reading on-chain hold events directly, so it works without
         already knowing any batch ID. No wallet needed. Pages through up to 4,000 hold/release
         events (20 pages of 200) rather than silently stopping at the first page.
       </p>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button type="button" className="btn btn-secondary" onClick={() => refetch()} disabled={isFetching}>
+          {isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+        {dataUpdatedAt > 0 && !isFetching && (
+          <span className="helper-text">Last updated {new Date(dataUpdatedAt).toLocaleTimeString()}</span>
+        )}
+      </div>
 
       {isLoading && <p className="helper-text">Reading hold events from Sui…</p>}
       {isError && <p className="error-text">Could not read hold events from Sui. Try again shortly.</p>}

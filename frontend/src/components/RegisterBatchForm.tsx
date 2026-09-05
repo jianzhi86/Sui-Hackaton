@@ -27,6 +27,10 @@ function defaultExpiryDateInput(): string {
   return d.toISOString().slice(0, 10);
 }
 
+function todayDateInput(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function RegisterBatchForm() {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
@@ -41,6 +45,7 @@ export function RegisterBatchForm() {
   const [lastDigest, setLastDigest] = useState<string | null>(null);
 
   const canAct = Boolean(account);
+  const canSubmit = canAct && Boolean(batchCode.trim()) && Boolean(productName.trim());
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -63,6 +68,15 @@ export function RegisterBatchForm() {
       return;
     }
     const stakeMist = BigInt(Math.round(stakeSuiNum * Number(MIST_PER_SUI)));
+
+    if (
+      stakeSuiNum > 0 &&
+      !window.confirm(
+        `Lock ${stakeSuiNum} SUI as stake for this batch? It stays locked until expiry and can be partly or fully slashed if a hold is later placed on this batch.`,
+      )
+    ) {
+      return;
+    }
 
     const tx = new Transaction();
     const [stakeCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(stakeMist)]);
@@ -102,6 +116,15 @@ export function RegisterBatchForm() {
     );
   }
 
+  function handleRegisterAnother() {
+    setBatchCode('');
+    setProductName('');
+    setExpiryDate(defaultExpiryDateInput());
+    setCreatedBatchId(null);
+    setLastDigest(null);
+    setError(null);
+  }
+
   const verifyUrl = createdBatchId
     ? `${window.location.origin}${window.location.pathname}?batch=${createdBatchId}`
     : null;
@@ -126,7 +149,7 @@ export function RegisterBatchForm() {
             <input
               id="batchCode"
               value={batchCode}
-              onChange={(e) => setBatchCode(e.target.value)}
+              onChange={(e) => setBatchCode(e.target.value.toUpperCase())}
               placeholder="e.g. AMX-2026-0417"
               disabled={!canAct || isPending}
             />
@@ -149,6 +172,7 @@ export function RegisterBatchForm() {
             <input
               id="expiryDate"
               type="date"
+              min={todayDateInput()}
               value={expiryDate}
               onChange={(e) => setExpiryDate(e.target.value)}
               disabled={!canAct || isPending}
@@ -179,7 +203,7 @@ export function RegisterBatchForm() {
           batch expires. Leave at 0 to register without staking anything.
         </p>
 
-        <button type="submit" className="btn btn-primary" disabled={!canAct || isPending}>
+        <button type="submit" className="btn btn-primary" disabled={!canSubmit || isPending}>
           {isPending ? 'Registering on-chain…' : 'Register batch'}
         </button>
       </form>
@@ -202,6 +226,14 @@ export function RegisterBatchForm() {
             helper="Anyone who scans this code lands on the public verification page for this exact batch."
           />
           <ItemQrSheet batchId={createdBatchId} batchCode={batchCode.trim()} />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ marginTop: 16 }}
+            onClick={handleRegisterAnother}
+          >
+            Register another batch
+          </button>
         </div>
       )}
     </section>

@@ -30,7 +30,7 @@ interface Stats {
 export function StatsDashboard() {
   const client = useSuiClient();
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['stats', PACKAGE_ID],
     queryFn: async (): Promise<Stats> => {
       const [created, checkpoints, minted, sold, held, released, suspicions, slashed, withdrawn] =
@@ -133,6 +133,15 @@ export function StatsDashboard() {
         System-wide numbers computed entirely from public on-chain events — no wallet needed, and
         nothing here is a new piece of on-chain state, just a summary of what's already public.
       </p>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button type="button" className="btn btn-secondary" onClick={() => refetch()} disabled={isFetching}>
+          {isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+        {dataUpdatedAt > 0 && !isFetching && (
+          <span className="helper-text">Last updated {new Date(dataUpdatedAt).toLocaleTimeString()}</span>
+        )}
+      </div>
 
       {isLoading && <p className="helper-text">Reading events from Sui…</p>}
       {isError && <p className="error-text">Could not read events from Sui. Try again shortly.</p>}

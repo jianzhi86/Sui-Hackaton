@@ -6,6 +6,7 @@ import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
+import { ConnectWalletBanner } from './ConnectWalletBanner';
 import {
   CATEGORY_COLD_CHAIN_BREACH,
   CATEGORY_COUNTERFEIT,
@@ -43,6 +44,41 @@ const CATEGORY_LABELS: Record<HoldCategory, string> = {
   4: 'Cold-Chain Breach',
   5: 'Other',
 };
+
+const SEVERITY_DESCRIPTIONS: Record<HoldSeverity, string> = {
+  1: 'A minor concern worth flagging, but not urgent enough to stop sales — e.g. a slightly torn box.',
+  2: 'Enough of a concern to pull this batch from sale while it is investigated.',
+  3: 'Serious enough to stop sale immediately — needs two different regulators to release it.',
+};
+
+/** One-click starting points for the situations pharmacy and counter staff
+ * hit most often — picking a severity/category pair from a dropdown cold is
+ * slower than recognizing a familiar scenario by name. */
+const QUICK_PRESETS: Array<{
+  label: string;
+  severity: HoldSeverity;
+  category: HoldCategory;
+  reasonPlaceholder: string;
+}> = [
+  {
+    label: '💊 Suspected counterfeit',
+    severity: SEVERITY_CRITICAL,
+    category: CATEGORY_COUNTERFEIT,
+    reasonPlaceholder: 'e.g. Packaging seal, hologram, or blister colour looks wrong',
+  },
+  {
+    label: '🌡 Cold-chain breach',
+    severity: SEVERITY_RECALL,
+    category: CATEGORY_COLD_CHAIN_BREACH,
+    reasonPlaceholder: 'e.g. Cold-chain checkpoint showed a temperature outside the safe range',
+  },
+  {
+    label: '📦 Damaged packaging',
+    severity: SEVERITY_ADVISORY,
+    category: CATEGORY_OTHER,
+    reasonPlaceholder: 'e.g. Box was crushed or torn in transit, contents look fine',
+  },
+];
 
 export function CategoryBadge({ category }: { category: HoldCategory }) {
   return <span className="severity-badge" style={{ color: 'var(--ink-soft)' }}>{CATEGORY_LABELS[category]}</span>;
@@ -114,7 +150,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
   const [reason, setReason] = useState('');
-  const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_RECALL);
+  const [severity, setSeverity] = useState<HoldSeverity>(SEVERITY_ADVISORY);
   const [category, setCategory] = useState<HoldCategory>(CATEGORY_QUALITY_DEFECT);
   const [caseReference, setCaseReference] = useState('');
   const [releaseNote, setReleaseNote] = useState('');
@@ -156,7 +192,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
         onSuccess: () => {
           setReason('');
           setCaseReference('');
-          setSeverity(SEVERITY_RECALL);
+          setSeverity(SEVERITY_ADVISORY);
           setCategory(CATEGORY_QUALITY_DEFECT);
           toast.success('Hold placed. Sales and checkpoints are now blocked for this batch.');
           onChanged();
@@ -425,10 +461,34 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
             </form>
           )}
 
-          {!account && <p className="helper-text">Connect a wallet to release this hold.</p>}
+          {!account && <ConnectWalletBanner action="release this hold" />}
         </div>
       ) : (
         <div className="hold-banner">
+          <p className="helper-text" style={{ marginTop: 0 }}>
+            Anyone connected — pharmacy staff, distributor, manufacturer, or regulator — can place a
+            hold here the moment something looks wrong. It immediately blocks new checkpoints, sale
+            QRs, and payments for this batch.
+          </p>
+          <div className="field" style={{ marginBottom: 12 }}>
+            <label>Quick start (optional)</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {QUICK_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setSeverity(preset.severity);
+                    setCategory(preset.category);
+                  }}
+                  disabled={!canAct || isPending}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <form onSubmit={handlePlaceHold}>
             <div className="field">
               <label htmlFor="holdReason">Place a hold on this batch</label>
@@ -436,7 +496,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
                 id="holdReason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. Suspected counterfeit — seal mismatch"
+                placeholder={QUICK_PRESETS.find((p) => p.severity === severity && p.category === category)?.reasonPlaceholder ?? 'e.g. Suspected counterfeit — seal mismatch'}
                 disabled={!canAct || isPending}
               />
             </div>
@@ -453,6 +513,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
                   <option value={SEVERITY_RECALL}>Recall</option>
                   <option value={SEVERITY_CRITICAL}>Critical — stop sale</option>
                 </select>
+                <p className="helper-text" style={{ marginTop: 2 }}>{SEVERITY_DESCRIPTIONS[severity]}</p>
               </div>
               <div className="field">
                 <label htmlFor="holdCategory">Category</label>
@@ -476,7 +537,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
                 id="caseReference"
                 value={caseReference}
                 onChange={(e) => setCaseReference(e.target.value)}
-                placeholder="e.g. MOH-2026-0417"
+                placeholder="e.g. MOH-2026-0417, or your pharmacy's own incident number"
                 disabled={!canAct || isPending}
               />
             </div>
@@ -484,7 +545,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
             <button type="submit" className="btn btn-danger" disabled={!canAct || isPending}>
               {isPending ? 'Placing hold…' : 'Place hold'}
             </button>
-            {!account && <p className="helper-text">Connect a wallet to place a hold.</p>}
+            {!account && <ConnectWalletBanner action="place a hold" />}
           </form>
         </div>
       )}
