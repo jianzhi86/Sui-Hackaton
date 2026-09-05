@@ -37,10 +37,30 @@ function gonkaDevProxy(env: Record<string, string>): Plugin {
             const baseUrl = env.GONKA_BASE_URL || 'https://api.gonkarouter.io/v1';
             const upstream = await fetch(`${baseUrl}/chat/completions`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+                // See api/gonka.ts for why: without this, the router can
+                // silently serve a different model than requested on
+                // fallback, breaking the two-model cross-check.
+                'X-Gonka-No-Fallback': 'true',
+              },
               body: JSON.stringify({ model, messages, temperature }),
             });
-            const data = await upstream.text();
+            const requestId = upstream.headers.get('x-request-id');
+            const devshardId = upstream.headers.get('x-devshard-id');
+            const raw = await upstream.text();
+            let data = raw;
+            if (requestId) {
+              try {
+                const parsed = JSON.parse(raw);
+                parsed.x_request_id = requestId;
+                if (devshardId) parsed.x_devshard_id = devshardId;
+                data = JSON.stringify(parsed);
+              } catch {
+                // Non-JSON upstream response — forward as-is.
+              }
+            }
             res.statusCode = upstream.status;
             res.setHeader('Content-Type', 'application/json');
             res.end(data);

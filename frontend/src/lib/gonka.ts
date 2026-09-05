@@ -25,9 +25,13 @@ import { analyzeChain, analyzeCrossBatch } from './chainAnalysis';
 // gonkarouter.io/docs: these are the real model ID strings GonkaRouter
 // expects in the "model" field (plain 'minimax'/'kimi' 404s). Note: "model
 // ids differ per gateway plan" per their docs — check the /models page for
-// your account if these stop working.
+// your account if these stop working. moonshotai/Kimi-K2.6 is listed but
+// currently has no serving capacity (confirmed live 2026-09-05 via
+// X-Gonka-No-Fallback returning "model_not_found: No available channel") —
+// deepseek-ai/DeepSeek-V4-Flash-0731 is used instead, confirmed genuinely
+// distinct from MiniMax rather than silently falling back to it.
 const MODEL_A = import.meta.env.VITE_GONKA_MODEL_A || 'MiniMaxAI/MiniMax-M2.7';
-const MODEL_B = import.meta.env.VITE_GONKA_MODEL_B || 'moonshotai/Kimi-K2.6';
+const MODEL_B = import.meta.env.VITE_GONKA_MODEL_B || 'deepseek-ai/DeepSeek-V4-Flash-0731';
 
 interface RawModelResponse {
   requestId: string;
@@ -62,7 +66,13 @@ async function callGonkaModel(model: string, prompt: string): Promise<RawModelRe
 
   const data = await res.json();
   const content: string = data?.choices?.[0]?.message?.content ?? '';
-  const requestId: string = data?.id ?? data?.request_id ?? 'unknown-request-id';
+  // x_request_id (from the upstream X-Request-Id header, relayed by our
+  // proxy — see api/gonka.ts) is the real per-request identifier for the
+  // Execution Hash -> receipt cross-check via GET /v1/receipts/{id}.
+  // data.id ("devshard-<node>-<seq>") is only the serving node's own
+  // internal inference id, not unique per request, so it's a fallback of
+  // last resort if the proxy somehow didn't attach x_request_id.
+  const requestId: string = data?.x_request_id ?? data?.id ?? data?.request_id ?? 'unknown-request-id';
   return { requestId, content };
 }
 

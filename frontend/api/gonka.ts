@@ -29,11 +29,38 @@ export default async function handler(req: any, res: any) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
+        // Without this, the router can silently re-route a request to a
+        // different model on fallback while still labelling the response
+        // with the model we asked for in some places — confirmed live: a
+        // request for moonshotai/Kimi-K2.6 came back answered by
+        // MiniMax-M2.7 with no indication in the body. This header keeps
+        // the model that actually serves the request equal to the one we
+        // asked for, which our two-model cross-check depends on.
+        'X-Gonka-No-Fallback': 'true',
       },
       body: JSON.stringify({ model, messages, temperature }),
     });
 
-    const data = await upstream.text();
+    // The real per-request identifier is the X-Request-Id response header
+    // (the "req-..." id), not the "devshard-..." value in the JSON body's
+    // `id` field — that's the serving node's own inference id, shared
+    // across many unrelated requests. Surface X-Request-Id in the body so
+    // the client (which only sees this JSON, not raw response headers)
+    // can use it for the on-chain Execution Hash cross-check.
+    const requestId = upstream.headers.get('x-request-id');
+    const devshardId = upstream.headers.get('x-devshard-id');
+    const raw = await upstream.text();
+    let data = raw;
+    if (requestId) {
+      try {
+        const parsed = JSON.parse(raw);
+        parsed.x_request_id = requestId;
+        if (devshardId) parsed.x_devshard_id = devshardId;
+        data = JSON.stringify(parsed);
+      } catch {
+        // Non-JSON upstream response (e.g. an error page) — forward as-is.
+      }
+    }
     res.status(upstream.status).setHeader('Content-Type', 'application/json').send(data);
   } catch (err) {
     res.status(502).json({ error: `Failed to reach Gonka Router: ${String(err)}` });
