@@ -87,15 +87,16 @@ export function analyzeChain(batch: BatchRecord): string[] {
   // 5. A later expected step exists without an earlier one — soft signal
   //    only, since real chains can legitimately have more hops than this
   //    three-step model assumes.
-  const roles = cps.map((c) => c.role.toLowerCase());
+  const roles = ['manufacturer',...cps.map((c) => c.role.toLowerCase()),];
   const seenIndex = EXPECTED_ORDER.map((r) => roles.indexOf(r));
   for (let i = 1; i < seenIndex.length; i++) {
     if (seenIndex[i] !== -1 && seenIndex[i - 1] === -1) {
       findings.push(
         `A "${EXPECTED_ORDER[i]}" checkpoint exists but "${EXPECTED_ORDER[i - 1]}" was never recorded — a step in the expected chain appears to be missing.`,
-    );
+      );
+     }
     }
-    }
+    return findings;
   }
 
 /**
