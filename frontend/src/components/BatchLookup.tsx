@@ -275,9 +275,9 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
 
           {report && <AnomalyPanel report={report} />}
 
-          <CrossBatchPanel key={batch.objectId} batch={batch} />
+          <CrossBatchPanel key={`cross-${batch.objectId}`} batch={batch} />
 
-          <ItemQrSheet key={batch.objectId} batchId={batch.objectId} batchCode={batch.batchCode} />
+          <ItemQrSheet key={`items-${batch.objectId}`} batchId={batch.objectId} batchCode={batch.batchCode} />
         </div>
       )}
     </section>
