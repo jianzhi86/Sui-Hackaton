@@ -33,9 +33,9 @@ body {
   margin: 0;
   background: var(--paper);
   background-image:
-    linear-gradient(var(--line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: 32px 32px;
+    linear-gradient(rgba(159, 176, 170, 0.22) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(159, 176, 170, 0.22) 1px, transparent 1px);
+  background-size: 40px 40px;
   background-attachment: fixed;
   background-position: -1px -1px;
   color: var(--ink);
@@ -95,10 +95,11 @@ a:focus-visible {
   font-weight: 600;
   font-size: 14px;
   color: var(--paper-raised);
-  background: var(--ink);
-  border-radius: 4px;
-  padding: 6px 8px;
+  background: var(--verify-teal);
+  border-radius: 7px;
+  padding: 6px 9px;
   letter-spacing: 0.04em;
+  box-shadow: 0 2px 6px rgba(31, 111, 92, 0.28);
 }
 
 .brand h1 {
@@ -122,11 +123,12 @@ a:focus-visible {
   gap: 4px;
   background: var(--paper-raised);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 9px;
   padding: 4px;
   max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  box-shadow: 0 1px 2px rgba(11, 32, 39, 0.04);
 }
 
 .tab-button {
@@ -137,10 +139,10 @@ a:focus-visible {
   border: none;
   background: transparent;
   padding: 7px 12px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--ink-soft);
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -170,8 +172,9 @@ a:focus-visible {
 }
 
 .tab-button.is-active {
-  background: var(--ink);
+  background: var(--verify-teal);
   color: var(--paper-raised);
+  box-shadow: 0 2px 6px rgba(31, 111, 92, 0.28);
 }
 
 .tab-label {
@@ -191,9 +194,10 @@ a:focus-visible {
 .panel {
   background: var(--paper-raised);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 26px;
   margin-bottom: 20px;
+  box-shadow: 0 1px 2px rgba(11, 32, 39, 0.04), 0 6px 20px -12px rgba(11, 32, 39, 0.12);
 }
 
 @media (max-width: 640px) {
@@ -204,8 +208,10 @@ a:focus-visible {
 
 .panel h2 {
   font-family: var(--font-display);
-  font-size: 19px;
-  margin: 0 0 4px;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 6px;
 }
 
 .panel-intro {
@@ -234,11 +240,26 @@ a:focus-visible {
 .field select,
 .field textarea {
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
+  border-radius: 7px;
   padding: 10px 12px;
   font-size: 14px;
   background: var(--paper-raised);
   color: var(--ink);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.field input:hover,
+.field select:hover,
+.field textarea:hover {
+  border-color: var(--ink-soft);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: var(--verify-teal);
+  box-shadow: 0 0 0 3px var(--verify-teal-soft);
 }
 
 .field textarea {
@@ -268,8 +289,8 @@ a:focus-visible {
   color: var(--danger);
   background: var(--danger-soft);
   border: 1px solid var(--danger);
-  border-radius: 4px;
-  padding: 8px 12px;
+  border-radius: 7px;
+  padding: 9px 13px;
   margin: 4px 0 16px;
 }
 
@@ -278,8 +299,8 @@ a:focus-visible {
   color: var(--verify-teal);
   background: var(--verify-teal-soft);
   border: 1px solid var(--verify-teal);
-  border-radius: 4px;
-  padding: 8px 12px;
+  border-radius: 7px;
+  padding: 9px 13px;
   margin: 4px 0 16px;
 }
 
@@ -289,16 +310,18 @@ a:focus-visible {
   font-family: var(--font-body);
   font-weight: 600;
   font-size: 14px;
-  border-radius: 4px;
-  padding: 10px 18px;
+  border-radius: 8px;
+  padding: 10px 20px;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: transform 80ms ease, filter 120ms ease;
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 150ms ease, background-color 150ms ease;
 }
 
 .btn:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .btn:not(:disabled):active {
@@ -306,40 +329,48 @@ a:focus-visible {
 }
 
 .btn-primary {
-  background: var(--ink);
+  background: var(--verify-teal);
   color: var(--paper-raised);
+  box-shadow: 0 1px 2px rgba(31, 111, 92, 0.15), 0 4px 12px -4px rgba(31, 111, 92, 0.35);
 }
 
 .btn-primary:not(:disabled):hover {
-  filter: brightness(1.15);
+  filter: brightness(1.08);
+  box-shadow: 0 2px 4px rgba(31, 111, 92, 0.18), 0 8px 16px -6px rgba(31, 111, 92, 0.4);
+  transform: translateY(-1px);
 }
 
 .btn-secondary {
-  background: transparent;
+  background: var(--paper-raised);
   border-color: var(--line-strong);
   color: var(--ink);
 }
 
 .btn-secondary:not(:disabled):hover {
   background: var(--verify-teal-soft);
+  border-color: var(--verify-teal);
+  color: var(--verify-teal);
 }
 
 .btn-danger {
   background: var(--danger);
   color: var(--paper-raised);
+  box-shadow: 0 1px 2px rgba(178, 58, 46, 0.15), 0 4px 12px -4px rgba(178, 58, 46, 0.35);
 }
 
 .btn-danger:not(:disabled):hover {
-  filter: brightness(1.1);
+  filter: brightness(1.08);
+  box-shadow: 0 2px 4px rgba(178, 58, 46, 0.18), 0 8px 16px -6px rgba(178, 58, 46, 0.4);
+  transform: translateY(-1px);
 }
 
 /* ---------- Hold banner ---------- */
 
 .hold-banner {
   margin: 16px 0;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
+  border-radius: 9px;
   background: var(--paper-raised);
 }
 
@@ -360,7 +391,7 @@ a:focus-visible {
   margin: 12px 0;
   padding: 10px 14px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 9px;
 }
 
 /* ---------- Hold severity badges ---------- */
@@ -401,16 +432,18 @@ a:focus-visible {
   font-size: 12px;
   background: var(--paper);
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
+  border-radius: 5px;
   padding: 2px 6px;
   word-break: break-all;
   color: inherit;
   text-decoration: none;
+  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease;
 }
 
 a.code-chip:hover {
   border-color: var(--verify-teal);
   color: var(--verify-teal);
+  background: var(--verify-teal-soft);
 }
 
 .code-chip-group {
@@ -501,7 +534,7 @@ a.code-chip:hover {
   gap: 14px;
   padding: 24px;
   border: 1px dashed var(--line-strong);
-  border-radius: 6px;
+  border-radius: 10px;
   background: var(--paper);
   text-align: center;
 }
@@ -509,8 +542,9 @@ a.code-chip:hover {
 .qr-card svg {
   background: white;
   padding: 12px;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid var(--line);
+  box-shadow: 0 1px 3px rgba(11, 32, 39, 0.06);
 }
 
 /* ---------- Ledger timeline (the page's signature element) ---------- */
@@ -637,7 +671,7 @@ a.code-chip:hover {
 
 .model-card {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 9px;
   padding: 14px;
   background: var(--paper);
 }
@@ -723,10 +757,16 @@ a.code-chip:hover {
 
 .stat-card {
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 14px;
+  border-radius: 9px;
+  padding: 16px 14px;
   background: var(--paper);
   text-align: center;
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.stat-card:hover {
+  box-shadow: 0 4px 14px -6px rgba(11, 32, 39, 0.18);
+  transform: translateY(-1px);
 }
 
 .stat-value {
