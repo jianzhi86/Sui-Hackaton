@@ -106,7 +106,9 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
       setLastReportFingerprint(batchFingerprint);
       setReportInvalidated(false);
       if (result.models.length === 0) {
-        toast.error('Gonka Router was unreachable — showing rule-based findings only.');
+        toast.error('No valid model responses — showing rule-based findings only.');
+      } else if (result.models.length === 1) {
+        toast.error('Only one model responded; independent verification is incomplete.');
       } else {
         toast.success('AI verification complete.');
       }
@@ -154,8 +156,7 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
       )}
       {isFetched && !isLoading && !isError && !batch && queryId && (
         <p className="error-text">
-          No batch found at that ID. This exact serial does not exist on-chain — treat the
-          product as unverified and do not use it.
+          No compatible batch found. Check the ID, network and contract version. A label number alone does not prove an item is registered.
         </p>
       )}
 

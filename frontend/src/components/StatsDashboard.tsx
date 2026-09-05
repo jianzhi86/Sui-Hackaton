@@ -1,7 +1,7 @@
 import { useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
-import { PACKAGE_ID } from '../lib/network';
+import { TYPE_PACKAGE_ID } from '../lib/network';
 import { fetchAllEvents } from '../lib/activeHolds';
 
 interface Stats {
@@ -31,19 +31,19 @@ export function StatsDashboard() {
   const client = useSuiClient();
 
   const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ['stats', PACKAGE_ID],
+    queryKey: ['stats', TYPE_PACKAGE_ID],
     queryFn: async (): Promise<Stats> => {
       const [created, checkpoints, minted, sold, held, released, suspicions, slashed, withdrawn] =
         await Promise.all([
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchCreated`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::CheckpointAdded`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::UnitMinted`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::UnitSold`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchHeld`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchReleased`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::SuspicionReported`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::StakeSlashed`),
-          fetchAllEvents(client, `${PACKAGE_ID}::batch::StakeWithdrawn`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchCreated`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::CheckpointAdded`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::UnitMinted`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::UnitSold`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchHeld`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchReleased`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::SuspicionReported`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::StakeSlashed`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::StakeWithdrawn`),
         ]);
 
       // Active holds = batches whose most recent held/released event is a

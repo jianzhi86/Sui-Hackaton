@@ -9,14 +9,20 @@ export function useSignAndExecute() {
   const client = useSuiClient();
 
   return useSignAndExecuteTransaction({
-    execute: async ({ bytes, signature }) =>
-      client.executeTransactionBlock({
+    execute: async ({ bytes, signature }) => {
+      const result = await client.executeTransactionBlock({
         transactionBlock: bytes,
         signature,
         options: {
           showRawEffects: true,
+          showEffects: true,
           showObjectChanges: true,
         },
-      }),
+      });
+      if (result.effects?.status.status !== 'success') {
+        throw new Error(result.effects?.status.error || 'Transaction success could not be confirmed. Check the transaction before retrying.');
+      }
+      return result;
+    },
   });
 }

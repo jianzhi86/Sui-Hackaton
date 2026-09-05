@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSuiClient } from '@mysten/dapp-kit';
-import { PACKAGE_ID } from '../lib/network';
+import { TYPE_PACKAGE_ID } from '../lib/network';
 import { fetchAllEvents } from '../lib/activeHolds';
 import { parseBatchObject } from '../lib/suiRead';
 import { checkCrossBatchAnomaly } from '../lib/gonka';
@@ -65,7 +65,7 @@ export function CrossBatchPanel({ batch }: CrossBatchPanelProps) {
     setChecking(true);
     setReport(null);
     try {
-      const createdEvents = await fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchCreated`);
+      const createdEvents = await fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchCreated`);
       const siblingIds = createdEvents
         .map((e) => {
           const pj = (e?.parsedJson ?? {}) as Record<string, unknown>;
@@ -81,10 +81,16 @@ export function CrossBatchPanel({ batch }: CrossBatchPanelProps) {
         .filter((b): b is BatchRecord => b !== null);
 
       setSiblingCount(batches.length);
+      if (batches.length < 2) {
+        toast.error('At least two compatible batches are needed for a comparison.');
+        return;
+      }
       const result = await checkCrossBatchAnomaly(batches);
       setReport(result);
       if (result.models.length === 0) {
-        toast.error('Gonka Router was unreachable — showing rule-based findings only.');
+        toast.error('No valid model responses — showing rule-based findings only.');
+      } else if (result.models.length === 1) {
+        toast.error('Only one model responded; independent verification is incomplete.');
       } else {
         toast.success('Cross-batch check complete.');
       }

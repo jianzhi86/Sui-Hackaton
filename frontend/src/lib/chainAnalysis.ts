@@ -23,6 +23,7 @@ export const COLD_CHAIN_MAX_C = 8;
 export function analyzeChain(batch: BatchRecord): string[] {
   const findings: string[] = [];
   const cps = batch.checkpoints;
+  if (batch.expiryMs <= Date.now()) findings.push('This batch has expired — sale is blocked.');
 
   if (batch.isHeld) {
     findings.push(
@@ -109,7 +110,6 @@ export function analyzeChain(batch: BatchRecord): string[] {
 export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
   const findings: string[] = [];
   if (batches.length < 2) {
-    findings.push('Only one batch found for this manufacturer — nothing to compare across yet.');
     return findings;
   }
 
@@ -159,9 +159,6 @@ export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
     );
   }
 
-  if (findings.length === 0) {
-    findings.push(`No cross-batch pattern found across ${batches.length} batches from this manufacturer.`);
-  }
 
   return findings;
 }

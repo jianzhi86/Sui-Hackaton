@@ -1,6 +1,6 @@
 import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
-import { PACKAGE_ID } from '../lib/network';
+import { TYPE_PACKAGE_ID } from '../lib/network';
 import { fetchAllEvents } from '../lib/activeHolds';
 import { CodeChip } from './CodeChip';
 
@@ -28,9 +28,9 @@ export function MyBatchesPanel({ onSelectBatch }: MyBatchesPanelProps) {
   const client = useSuiClient();
 
   const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ['myBatches', PACKAGE_ID, account?.address],
+    queryKey: ['myBatches', TYPE_PACKAGE_ID, account?.address],
     queryFn: async (): Promise<MyBatchRow[]> => {
-      const created = await fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchCreated`);
+      const created = await fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchCreated`);
       return created
         .map((e) => {
           const pj = (e?.parsedJson ?? {}) as Record<string, unknown>;

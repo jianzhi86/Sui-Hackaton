@@ -1,6 +1,6 @@
 import { useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
-import { PACKAGE_ID } from '../lib/network';
+import { TYPE_PACKAGE_ID } from '../lib/network';
 import { computeActiveHolds, fetchAllEvents } from '../lib/activeHolds';
 import { CategoryBadge, SeverityBadge } from './HoldControl';
 import { CodeChip } from './CodeChip';
@@ -24,11 +24,11 @@ export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProp
   const client = useSuiClient();
 
   const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ['activeHolds', PACKAGE_ID],
+    queryKey: ['activeHolds', TYPE_PACKAGE_ID],
     queryFn: async () => {
       const [held, released] = await Promise.all([
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchHeld`),
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchReleased`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchHeld`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchReleased`),
       ]);
       return computeActiveHolds(held, released);
     },

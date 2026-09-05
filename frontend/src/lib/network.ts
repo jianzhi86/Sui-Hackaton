@@ -31,6 +31,9 @@ const RPC_URLS = {
  */
 export const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID || '0x0';
 
+/** Struct/event identity remains at its defining package after a Move upgrade. */
+export const TYPE_PACKAGE_ID = import.meta.env.VITE_TYPE_PACKAGE_ID || PACKAGE_ID;
+
 export const MODULE_NAME = 'batch';
 
 /** Sui's shared Clock object always lives at this fixed address. */
