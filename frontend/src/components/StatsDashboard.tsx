@@ -30,10 +30,10 @@ interface Stats {
 export function StatsDashboard() {
   const client = useSuiClient();
 
-  const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, isError, error, isFetching, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['stats', TYPE_PACKAGE_ID],
     queryFn: async (): Promise<Stats> => {
-      const [created, checkpoints, minted, sold, held, released, suspicions, slashed, withdrawn] =
+      const [created, checkpoints, minted, sold, held, released, suspicions, slashed, withdrawn, added] =
         await Promise.all([
           fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchCreated`),
           fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::CheckpointAdded`),
@@ -44,6 +44,7 @@ export function StatsDashboard() {
           fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::SuspicionReported`),
           fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::StakeSlashed`),
           fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::StakeWithdrawn`),
+          fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::StakeAdded`),
         ]);
 
       // Active holds = batches whose most recent held/released event is a
@@ -105,7 +106,7 @@ export function StatsDashboard() {
           return sum + Number(pj[field] ?? 0);
         }, 0);
 
-      const totalStakedMist = sumMist(created, 'stake_amount');
+      const totalStakedMist = sumMist(created, 'stake_amount') + sumMist(added, 'amount');
       const slashedMist = sumMist(slashed, 'amount');
       const withdrawnMist = sumMist(withdrawn, 'amount');
 
@@ -144,7 +145,7 @@ export function StatsDashboard() {
       </div>
 
       {isLoading && <p className="helper-text">Reading events from Sui…</p>}
-      {isError && <p className="error-text">Could not read events from Sui. Try again shortly.</p>}
+      {isError && <p className="error-text">{error instanceof Error ? error.message : 'Could not read events from Sui.'}</p>}
 
       {data && (
         <div className="stats-grid">

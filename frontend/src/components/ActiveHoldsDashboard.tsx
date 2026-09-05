@@ -23,7 +23,7 @@ interface ActiveHoldsDashboardProps {
 export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProps) {
   const client = useSuiClient();
 
-  const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, isError, error, isFetching, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['activeHolds', TYPE_PACKAGE_ID],
     queryFn: async () => {
       const [held, released] = await Promise.all([
@@ -62,7 +62,7 @@ export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProp
       </div>
 
       {isLoading && <p className="helper-text">Reading hold events from Sui…</p>}
-      {isError && <p className="error-text">Could not read hold events from Sui. Try again shortly.</p>}
+      {isError && <p className="error-text">{error instanceof Error ? error.message : 'Could not read hold events from Sui.'}</p>}
 
       {!isLoading && !isError && activeHolds.length === 0 && (
         <p className="success-banner">No batches are currently on hold.</p>

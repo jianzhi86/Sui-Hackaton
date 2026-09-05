@@ -26,6 +26,7 @@ export default async function handler(req: any, res: any) {
   try {
     const upstream = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
+      signal: AbortSignal.timeout(120_000),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,

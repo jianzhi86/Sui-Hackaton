@@ -120,20 +120,20 @@ export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
     for (const cp of b.checkpoints) {
       actorTimestamps.set(cp.actor, [
         ...(actorTimestamps.get(cp.actor) ?? []),
-        { batchCode: b.batchCode, ts: cp.timestampMs },
+        { batchCode: b.objectId, ts: cp.timestampMs },
       ]);
     }
   }
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   for (const [actor, entries] of actorTimestamps) {
-    const distinctBatches = new Set(entries.map((e) => e.batchCode));
-    if (distinctBatches.size < 3) continue;
     const sorted = [...entries].sort((a, b) => a.ts - b.ts);
-    const span = sorted[sorted.length - 1].ts - sorted[0].ts;
-    if (span <= ONE_DAY_MS) {
-      findings.push(
-        `Address ${actor} recorded checkpoints on ${distinctBatches.size} different batches (${[...distinctBatches].join(', ')}) within a single day — unusually concentrated for one actor.`,
-      );
+    for (let left = 0, right = 0; right < sorted.length; right++) {
+      while (sorted[right].ts - sorted[left].ts > ONE_DAY_MS) left++;
+      const distinct = new Set(sorted.slice(left, right + 1).map(e => e.batchCode));
+      if (distinct.size >= 3) {
+        findings.push(`Address ${actor} recorded checkpoints on ${distinct.size} distinct batches within a single day.`);
+        break;
+      }
     }
   }
 

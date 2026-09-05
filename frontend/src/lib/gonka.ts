@@ -41,6 +41,7 @@ interface RawModelResponse {
 async function callGonkaModel(model: string, prompt: string): Promise<RawModelResponse> {
   const res = await fetch('/api/gonka', {
     method: 'POST',
+    signal: AbortSignal.timeout(125_000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
