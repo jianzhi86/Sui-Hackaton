@@ -88,17 +88,15 @@ export function analyzeChain(batch: BatchRecord): string[] {
   // 5. A later expected step exists without an earlier one — soft signal
   //    only, since real chains can legitimately have more hops than this
   //    three-step model assumes.
-  const roles = ['manufacturer',...cps.map((c) => c.role.toLowerCase()),];
-  const seenIndex = EXPECTED_ORDER.map((r) => roles.indexOf(r));
+  const roles = ['manufacturer', ...cps.map(c => c.role.trim().toLowerCase())];
+  const seenIndex = EXPECTED_ORDER.map(r => roles.indexOf(r));
   for (let i = 1; i < seenIndex.length; i++) {
-    if (seenIndex[i] !== -1 && seenIndex[i - 1] === -1) {
-      findings.push(
-        `A "${EXPECTED_ORDER[i]}" checkpoint exists but "${EXPECTED_ORDER[i - 1]}" was never recorded — a step in the expected chain appears to be missing.`,
-      );
-     }
+    if (seenIndex[i] !== -1 && (seenIndex[i - 1] === -1 || seenIndex[i] < seenIndex[i - 1])) {
+      findings.push(`A "${EXPECTED_ORDER[i]}" checkpoint occurs without a preceding "${EXPECTED_ORDER[i - 1]}" checkpoint.`);
     }
-    return findings;
   }
+  return findings;
+}
 
 /**
  * Cross-batch checks: patterns only visible when looking at *multiple*
