@@ -27,7 +27,10 @@ Counterfeit and diverted medicines cause real harm and are extremely hard to cat
 
 ## Team
 
-- <!-- TODO: add team member names/handles here -->
+- Lee Jian Zhi
+- Huang Jinyang
+- Ooi Dun Tzi
+- Tamilzvanan
 
 ## AI tools used
 
@@ -148,7 +151,11 @@ GONKA_API_KEY=<your Gonka Router API key>
 
 # Model IDs aren't secret, so these stay client-side.
 VITE_GONKA_MODEL_A=MiniMaxAI/MiniMax-M2.7
-VITE_GONKA_MODEL_B=moonshotai/Kimi-K2.6
+VITE_GONKA_MODEL_B=deepseek-ai/DeepSeek-V4-Flash-0731
+
+# Optional: only needed after a `sui client upgrade` (not a fresh publish).
+# Defaults to VITE_PACKAGE_ID if unset — see the design-decision note below.
+# VITE_TYPE_PACKAGE_ID=<the original package id that first defined the events>
 ```
 
 ### 3. Wallet setup
@@ -217,7 +224,7 @@ Manual end-to-end smoke test (needs a funded testnet wallet): register a batch �
 - **Stake stays locked for the whole shelf life, not until the manufacturer wants it back.** `withdraw_stake` requires `clock.timestamp_ms() >= expiry_ms`. Without that, a manufacturer could stake a token amount, withdraw it immediately, and let a counterfeiting problem surface only after the money is already back in their wallet — defeating the entire point of collateral.
 - **`add_stake` exists because collateral needs a way to grow, not just shrink.** A manufacturer who registered without staking (or staked too little) had no path to strengthen their bond later — only `withdraw_stake` existed, one-directional. `add_stake` mirrors `withdraw_stake`'s guardrails (must be this batch's manufacturer, blocked while held or expired) so a top-up can't be timed to make a batch look freshly collateralized mid-investigation, but otherwise just joins the payment into `Batch.stake`.
 - **Suspicion reports are bonded, not free — and the bond has a real floor.** `report_suspicion` requires a `Coin<SUI>` bond of at least `MIN_SUSPICION_BOND` (0.01 SUI), held in a shared `SuspicionReport` object until confirmed (bond refunded) or rejected (bond forfeited to whoever rejected it, compensating their time reviewing something that turned out to be noise). A merely-nonzero bond (an earlier design) technically deters *free* spam, but a 1-MIST bond is spam with extra steps; a real floor is what makes the deterrent a genuine cost.
-- **A lesson learned along the way: `sui client upgrade` is compatible, but events aren't upgrade-stable.** A prior change (the minimum-bond floor) only tightened an assert inside an existing function — no struct or signature changes — so it looked like a textbook case for `sui client upgrade` instead of a fresh publish. Testing it live showed the catch: every event's `packageId` (and therefore its `MoveEventType`) switches to the *new* package address after an upgrade, while everything emitted before the upgrade keeps the old address. Every event-driven feature here (Active Holds, Stats, suspicion-report listing, cross-batch lookup) filters by one fixed `PACKAGE_ID`, so an upgrade would have made all of them silently blind to pre-upgrade history. This project sticks to fresh publishes specifically to keep one package ID as the single source of truth for the whole event log, at the cost of orphaning existing batches/units on every change.
+- **A lesson learned along the way: `sui client upgrade` is compatible, but events aren't upgrade-stable — until you split the two IDs that were conflated.** A prior change (the minimum-bond floor) only tightened an assert inside an existing function — no struct or signature changes — so it looked like a textbook case for `sui client upgrade` instead of a fresh publish. Testing it live showed the catch: every event's `packageId` (and therefore its `MoveEventType`) switches to the *new* package address after an upgrade, while everything emitted before the upgrade keeps the old address. The fix isn't avoiding upgrades — it's not using the same ID for two different things. `PACKAGE_ID` (from `VITE_PACKAGE_ID`) is the address you call functions against, and always the latest upgraded package. `TYPE_PACKAGE_ID` (from `VITE_TYPE_PACKAGE_ID`, defaulting to `PACKAGE_ID` if unset) is the address that *defined* a struct/event's type, which never changes across upgrades — Move upgrade compatibility guarantees a struct's fully-qualified type identity is pinned to whichever package first published it. Every event-driven feature here (Active Holds, Stats, suspicion-report listing, cross-batch lookup) filters by `TYPE_PACKAGE_ID`, so it keeps seeing the whole event log across upgrades instead of only what was emitted after the most recent one — you only need to set `VITE_TYPE_PACKAGE_ID` explicitly if you've actually run `sui client upgrade` at least once; a fresh deployment needs nothing extra since the two IDs start out identical.
 - **Cross-batch AI check is a separate call, not a bigger single-batch prompt.** `checkCrossBatchAnomaly` reasons over every batch from one manufacturer at once specifically because some patterns (one actor's address touching an implausible number of a manufacturer's batches, repeated counterfeit findings across separate incidents) are structurally invisible to a prompt scoped to a single batch — no amount of a single-batch model "trying harder" can see across batches it never received.
 - **Stats dashboard reads events, not a maintained counter.** No entry function increments an on-chain "total batches" field — every number is recomputed from the same public event log the Active Holds dashboard and suspicion-report panel already read, so there's exactly one source of truth (the event log) instead of a counter that could drift from it.
 - **A QR of the current URL instead of a fake wallet deep link.** There's no standardized `sui://`-style URI scheme every wallet app honors the way some other ecosystems have; claiming one exists would just produce a button that silently does nothing on most wallets. Scanning a URL into a phone's camera and opening it in a wallet's built-in browser is what actually works today across Slush and Sui Wallet.
