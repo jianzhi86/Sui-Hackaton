@@ -9,6 +9,9 @@ import { useToast } from '../lib/toast';
 import { generateSecret, sha256Bytes } from '../lib/secret';
 import { QrCodeCard } from './QrCodeCard';
 import { CodeChip } from './CodeChip';
+import { ConnectWalletBanner } from './ConnectWalletBanner';
+import { usePersistedState, LAST_BATCH_ID_KEY } from '../lib/persisted';
+import { mistPreview } from '../lib/formatSui';
 
 interface CreatedObjectChange {
   type: string;
@@ -21,7 +24,7 @@ export function MintUnitForm() {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
 
-  const [batchId, setBatchId] = useState('');
+  const [batchId, setBatchId] = usePersistedState(LAST_BATCH_ID_KEY, '');
   const [priceSui, setPriceSui] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [createdUnitId, setCreatedUnitId] = useState<string | null>(null);
@@ -121,7 +124,7 @@ export function MintUnitForm() {
         and cloned like any barcode, but a clone without the matching code can't be redeemed.
       </p>
 
-      {!account && <p className="error-text">Connect a wallet to mint a sale QR.</p>}
+      {!account && <ConnectWalletBanner action="mint a sale QR" />}
       {error && <p className="error-text">{error}</p>}
       {batch?.isHeld && (
         <p className="error-text">
@@ -160,6 +163,11 @@ export function MintUnitForm() {
               placeholder="e.g. 5"
               disabled={!account || isPending}
             />
+            {Number(priceSui) > 0 && (
+              <span className="helper-text" style={{ fontFamily: 'var(--font-mono)' }}>
+                {mistPreview(Number(priceSui))}
+              </span>
+            )}
           </div>
         </div>
 

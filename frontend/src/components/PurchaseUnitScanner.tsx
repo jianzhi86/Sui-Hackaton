@@ -9,8 +9,10 @@ import { extractUnitId } from '../lib/qr';
 import { useToast } from '../lib/toast';
 import { sha256Hex, utf8Bytes } from '../lib/secret';
 import { CodeChip } from './CodeChip';
+import { ConnectWalletBanner } from './ConnectWalletBanner';
 import { explorerTxUrl } from '../lib/explorer';
 import { QrScanButton } from './QrScanButton';
+import { usePersistedState, LAST_UNIT_ID_KEY } from '../lib/persisted';
 
 interface PurchaseUnitScannerProps {
   initialUnitId?: string;
@@ -21,7 +23,7 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
 
-  const [unitId, setUnitId] = useState(initialUnitId ?? '');
+  const [unitId, setUnitId] = usePersistedState(LAST_UNIT_ID_KEY, initialUnitId ?? '');
   const [scratchCode, setScratchCode] = useState('');
   const [scratchCodeWrong, setScratchCodeWrong] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +134,7 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
         (just an object ID) can be photographed and cloned like any barcode.
       </p>
 
-      {!account && <p className="error-text">Connect a wallet to pay.</p>}
+      {!account && <ConnectWalletBanner action="pay for a package" />}
       {error && <p className="error-text">{error}</p>}
       {lastDigest && (
         <p className="success-banner">

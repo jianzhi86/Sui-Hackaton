@@ -133,6 +133,9 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
       setError('A case/investigation reference is required — this is what ties the hold back to your paperwork.');
       return;
     }
+    if (!window.confirm(`Place a ${SEVERITY_LABELS[severity]} hold on this batch? This blocks new checkpoints, sale QRs, and payments until it's released.`)) {
+      return;
+    }
 
     const tx = new Transaction();
     tx.moveCall({
@@ -231,6 +234,9 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
 
   function handleConfirmRelease() {
     setError(null);
+    if (!window.confirm('Confirm this release? This immediately lifts the Critical hold and re-enables sales — make sure you actually agree with the stated reason.')) {
+      return;
+    }
 
     const tx = new Transaction();
     tx.moveCall({

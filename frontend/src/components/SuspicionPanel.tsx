@@ -9,6 +9,8 @@ import { useToast } from '../lib/toast';
 import { fetchAllEvents } from '../lib/activeHolds';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
+import { mistPreview } from '../lib/formatSui';
+import { ConnectWalletBanner } from './ConnectWalletBanner';
 
 interface SuspicionPanelProps {
   batchId: string;
@@ -136,6 +138,9 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
   }
 
   function handleReject(reportId: string) {
+    if (!window.confirm('Reject this report as spam? The reporter\'s bond is forfeited to you and this cannot be undone.')) {
+      return;
+    }
     const tx = new Transaction();
     tx.moveCall({
       target: target('reject_suspicion'),
@@ -185,12 +190,15 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
             onChange={(e) => setBondSui(e.target.value)}
             disabled={!account || isPending}
           />
+          {Number(bondSui) > 0 && (
+            <p className="helper-text" style={{ marginTop: 2 }}>{mistPreview(Number(bondSui))}</p>
+          )}
         </div>
         <button type="submit" className="btn btn-secondary" disabled={!account || isPending}>
           {isPending ? 'Submitting…' : 'Submit report'}
         </button>
       </form>
-      {!account && <p className="helper-text">Connect a wallet to submit a report.</p>}
+      {!account && <ConnectWalletBanner action="submit a report" />}
 
       {isLoading && <p className="helper-text" style={{ marginTop: 8 }}>Reading reports…</p>}
       {!isLoading && reports.length === 0 && (

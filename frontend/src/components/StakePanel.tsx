@@ -6,6 +6,7 @@ import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
 import type { BatchRecord } from '../lib/types';
+import { mistPreview } from '../lib/formatSui';
 
 interface StakePanelProps {
   batch: BatchRecord;
@@ -115,6 +116,9 @@ export function StakePanel({ batch, onChanged }: StakePanelProps) {
                 placeholder="e.g. 5"
                 disabled={!canTopUp || isPending}
               />
+              {Number(topUpSui) > 0 && (
+                <p className="helper-text" style={{ marginTop: 2 }}>{mistPreview(Number(topUpSui))}</p>
+              )}
             </div>
             <button type="submit" className="btn btn-secondary" disabled={!canTopUp || isPending}>
               {isPending ? 'Adding…' : 'Add stake'}

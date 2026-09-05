@@ -7,7 +7,9 @@ import { QrScanButton } from './QrScanButton';
 import { extractBatchId } from '../lib/qr';
 import { useToast } from '../lib/toast';
 import { CodeChip } from './CodeChip';
+import { ConnectWalletBanner } from './ConnectWalletBanner';
 import { explorerTxUrl } from '../lib/explorer';
+import { usePersistedState, LAST_BATCH_ID_KEY } from '../lib/persisted';
 
 const ROLES = ['distributor', 'pharmacy', 'other'];
 
@@ -16,7 +18,7 @@ export function CheckpointScanner() {
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
 
-  const [batchId, setBatchId] = useState('');
+  const [batchId, setBatchId] = usePersistedState(LAST_BATCH_ID_KEY, '');
   const [role, setRole] = useState(ROLES[0]);
   const [location, setLocation] = useState('');
   const [note, setNote] = useState('');
@@ -88,7 +90,7 @@ export function CheckpointScanner() {
         automatically as the actor; it can't be typed over or spoofed from this form.
       </p>
 
-      {!account && <p className="error-text">Connect a wallet to record a checkpoint.</p>}
+      {!account && <ConnectWalletBanner action="record a checkpoint" />}
       {error && <p className="error-text">{error}</p>}
       {lastDigest && (
         <p className="success-banner">

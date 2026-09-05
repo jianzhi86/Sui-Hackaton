@@ -8,7 +8,9 @@ import { useToast } from '../lib/toast';
 import { QrCodeCard } from './QrCodeCard';
 import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
+import { ConnectWalletBanner } from './ConnectWalletBanner';
 import { explorerTxUrl } from '../lib/explorer';
+import { mistPreview } from '../lib/formatSui';
 
 interface CreatedObjectChange {
   type: string;
@@ -114,7 +116,7 @@ export function RegisterBatchForm() {
         claim (see the README for the tradeoff).
       </p>
 
-      {!account && <p className="error-text">Connect a wallet to register a batch.</p>}
+      {!account && <ConnectWalletBanner action="register a batch" />}
       {error && <p className="error-text">{error}</p>}
 
       <form onSubmit={handleSubmit}>
@@ -164,6 +166,11 @@ export function RegisterBatchForm() {
               placeholder="0"
               disabled={!canAct || isPending}
             />
+            {Number(stakeSui) > 0 && (
+              <span className="helper-text" style={{ fontFamily: 'var(--font-mono)' }}>
+                {mistPreview(Number(stakeSui))}
+              </span>
+            )}
           </div>
         </div>
         <p className="helper-text" style={{ marginTop: -8, marginBottom: 16 }}>

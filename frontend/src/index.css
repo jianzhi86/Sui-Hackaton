@@ -294,6 +294,37 @@ a:focus-visible {
   margin: 4px 0 16px;
 }
 
+/* ---------- Connect-wallet call to action ---------- */
+
+.connect-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  margin: 4px 0 20px;
+  border: 1px solid var(--verify-teal);
+  border-radius: 9px;
+  background: var(--verify-teal-soft);
+}
+
+.connect-banner-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.connect-banner strong {
+  display: block;
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.connect-banner p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
 .success-banner {
   font-size: 13px;
   color: var(--verify-teal);

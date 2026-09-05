@@ -15,6 +15,7 @@ import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
 import { useToast } from '../lib/toast';
 import { COLD_CHAIN_MAX_C, COLD_CHAIN_MIN_C } from '../lib/chainAnalysis';
+import { usePersistedState, LAST_BATCH_ID_KEY } from '../lib/persisted';
 
 /** How far ahead of expiry the UI starts warning — 60 days, a reasonable
  * pharma "reorder before this runs out" window. Purely a UI nudge; the
@@ -28,7 +29,7 @@ interface BatchLookupProps {
 
 export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps) {
   const toast = useToast();
-  const [batchId, setBatchId] = useState(initialBatchId ?? '');
+  const [batchId, setBatchId] = usePersistedState(LAST_BATCH_ID_KEY, initialBatchId ?? '');
   const [queryId, setQueryId] = useState(initialBatchId ?? '');
   const [serial, setSerial] = useState<string | null>(initialSerial ?? null);
   const [report, setReport] = useState<AnomalyReportResult | null>(null);
