@@ -3,7 +3,7 @@ import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
 import { Transaction } from '@mysten/sui/transactions';
 import { MIST_PER_SUI } from '@mysten/sui/utils';
-import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, MIN_SUSPICION_BOND_MIST, PACKAGE_ID, target } from '../lib/network';
+import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, MIN_SUSPICION_BOND_MIST, TYPE_PACKAGE_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
 import { friendlyMoveError } from '../lib/moveErrors';
@@ -48,12 +48,12 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['suspicionReports', PACKAGE_ID, batchId],
+    queryKey: ['suspicionReports', TYPE_PACKAGE_ID, batchId],
     queryFn: async () => {
       const [reported, confirmed, rejected] = await Promise.all([
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::SuspicionReported`),
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::SuspicionConfirmed`),
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::SuspicionRejected`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::SuspicionReported`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::SuspicionConfirmed`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::SuspicionRejected`),
       ]);
 
       const closedIds = new Set<string>();

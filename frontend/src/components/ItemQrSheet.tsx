@@ -9,8 +9,8 @@ interface ItemQrSheetProps {
 /**
  * Generates one verify QR per physical package in a print run — each
  * encodes the same shared `Batch` object ID plus a distinct `serial`
- * number, so every individual medicine gets its own printable, scannable
- * label while still verifying against the one on-chain batch record.
+ * UUID, so separate print runs do not reuse labels. A label still only
+ * resolves the batch; it is not an on-chain proof of a unique medicine.
  *
  * This is entirely client-side (no wallet, no transaction, no gas): the
  * serial is a labeling convention, not separate on-chain state, so there's
@@ -18,7 +18,7 @@ interface ItemQrSheetProps {
  */
 export function ItemQrSheet({ batchId, batchCode }: ItemQrSheetProps) {
   const [quantity, setQuantity] = useState('10');
-  const [serials, setSerials] = useState<number[] | null>(null);
+  const [serials, setSerials] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function handleGenerate(e: FormEvent) {
@@ -35,7 +35,7 @@ export function ItemQrSheet({ batchId, batchCode }: ItemQrSheetProps) {
       return;
     }
 
-    setSerials(Array.from({ length: count }, (_, i) => i + 1));
+    setSerials(Array.from({ length: count }, () => crypto.randomUUID()));
   }
 
   const origin = `${window.location.origin}${window.location.pathname}`;
@@ -71,8 +71,7 @@ export function ItemQrSheet({ batchId, batchCode }: ItemQrSheetProps) {
           <div className="no-print" style={{ marginBottom: 12 }}>
             <p className="helper-text">
               {serials.length} verify QR{serials.length === 1 ? '' : 's'} for batch{' '}
-              <span className="code-chip">{batchCode}</span>, each scannable and unique to one
-              physical package. Print this page (or just this section) and cut apart the labels.
+              <span className="code-chip">{batchCode}</span>, each with a randomly generated label ID. Labels identify this print run; they are not proof of authenticity or an on-chain item registration. Print this page (or just this section) and cut apart the labels.
             </p>
             <button type="button" className="btn btn-primary" onClick={() => window.print()}>
               Print
@@ -83,7 +82,7 @@ export function ItemQrSheet({ batchId, batchCode }: ItemQrSheetProps) {
             {serials.map((serial) => (
               <div className="qr-card qr-card-compact" key={serial}>
                 <QRCodeSVG value={`${origin}?batch=${batchId}&serial=${serial}`} size={128} level="M" />
-                <div style={{ fontSize: 11, fontWeight: 600 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, overflowWrap: 'anywhere' }}>
                   {batchCode} · #{serial}
                 </div>
               </div>

@@ -1,7 +1,7 @@
 import type { AnomalyReportResult } from '../lib/types';
 
 const CONSENSUS_LABEL: Record<AnomalyReportResult['consensus'], string> = {
-  clear: 'Clear',
+  clear: 'No anomalies found',
   flag: 'Flagged',
   needs_review: 'Needs review',
   unavailable: 'AI unavailable',
@@ -31,10 +31,10 @@ export function AnomalyPanel({ report }: { report: AnomalyReportResult }) {
         </>
       )}
 
+      {report.models.length === 1 && <p className="helper-text">Only one model returned a valid result; independent verification is incomplete.</p>}
       {report.models.length === 0 ? (
         <p className="error-text" style={{ marginTop: 12 }}>
-          Gonka Router was unreachable, so this report only reflects the rule-based findings
-          above. See src/lib/gonka.ts for what to check (base URL, auth header, response shape).
+          No valid AI result was available. This report only reflects local rules.
         </p>
       ) : (
         <div className="model-grid">

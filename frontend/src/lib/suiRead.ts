@@ -1,4 +1,5 @@
-import { TEMPERATURE_OFFSET_C } from './network';
+import { TYPE_PACKAGE_ID, TEMPERATURE_OFFSET_C } from './network';
+import { normalizeStructTag } from '@mysten/sui/utils';
 import type { BatchRecord, Checkpoint, HoldRecord, UnitRecord } from './types';
 
 /**
@@ -10,6 +11,11 @@ import type { BatchRecord, Checkpoint, HoldRecord, UnitRecord } from './types';
  *    are represented as `{ type, fields }` wrappers, one level deeper than
  *    the outer object's own fields.
  */
+
+function isExpectedObject(content: any, name: string): boolean {
+  try { return normalizeStructTag(content.type) === normalizeStructTag(`${TYPE_PACKAGE_ID}::batch::${name}`); }
+  catch { return false; }
+}
 
 function asNumber(value: unknown): number {
   if (typeof value === 'number') return value;
@@ -50,9 +56,14 @@ function unwrapOption<T>(value: unknown, map: (v: unknown) => T): T | null {
  */
 export function parseBatchObject(objectData: any): BatchRecord | null {
   const content = objectData?.data?.content;
-  if (!content || content.dataType !== 'moveObject') return null;
+  if (!content || content.dataType !== 'moveObject' || !isExpectedObject(content, 'Batch')) return null;
 
   const fields = content.fields as Record<string, unknown>;
+  // Reject incompatible legacy schemas instead of inventing a 1970 expiry.
+  if (!fields || typeof fields.batch_code !== 'string' || typeof fields.product_name !== 'string' ||
+      !Array.isArray(fields.checkpoints) || !Array.isArray(fields.hold_history) ||
+      typeof fields.is_held !== 'boolean' || !Number.isFinite(Number(fields.expiry_ms)) ||
+      Number(fields.expiry_ms) <= 0) return null;
   const rawCheckpoints = (fields.checkpoints as unknown[]) ?? [];
 
   const checkpoints: Checkpoint[] = rawCheckpoints.map((raw) => {
@@ -119,9 +130,12 @@ export function parseBatchObject(objectData: any): BatchRecord | null {
  */
 export function parseUnitObject(objectData: any): UnitRecord | null {
   const content = objectData?.data?.content;
-  if (!content || content.dataType !== 'moveObject') return null;
+  if (!content || content.dataType !== 'moveObject' || !isExpectedObject(content, 'Unit')) return null;
 
   const fields = content.fields as Record<string, unknown>;
+  if (!fields || typeof fields.batch_id !== 'string' || !Number.isSafeInteger(Number(fields.price)) ||
+      Number(fields.price) <= 0 || !Number.isFinite(Number(fields.minted_at_ms)) ||
+      !Array.isArray(fields.secret_hash) || fields.secret_hash.length !== 32) return null;
 
   return {
     objectId: objectData.data.objectId,

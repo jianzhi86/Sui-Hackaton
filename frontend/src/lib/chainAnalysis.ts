@@ -23,6 +23,7 @@ export const COLD_CHAIN_MAX_C = 8;
 export function analyzeChain(batch: BatchRecord): string[] {
   const findings: string[] = [];
   const cps = batch.checkpoints;
+  if (batch.expiryMs <= Date.now()) findings.push('This batch has expired — sale is blocked.');
 
   if (batch.isHeld) {
     findings.push(
@@ -87,17 +88,15 @@ export function analyzeChain(batch: BatchRecord): string[] {
   // 5. A later expected step exists without an earlier one — soft signal
   //    only, since real chains can legitimately have more hops than this
   //    three-step model assumes.
-  const roles = ['manufacturer',...cps.map((c) => c.role.toLowerCase()),];
-  const seenIndex = EXPECTED_ORDER.map((r) => roles.indexOf(r));
+  const roles = ['manufacturer', ...cps.map(c => c.role.trim().toLowerCase())];
+  const seenIndex = EXPECTED_ORDER.map(r => roles.indexOf(r));
   for (let i = 1; i < seenIndex.length; i++) {
-    if (seenIndex[i] !== -1 && seenIndex[i - 1] === -1) {
-      findings.push(
-        `A "${EXPECTED_ORDER[i]}" checkpoint exists but "${EXPECTED_ORDER[i - 1]}" was never recorded — a step in the expected chain appears to be missing.`,
-      );
-     }
+    if (seenIndex[i] !== -1 && (seenIndex[i - 1] === -1 || seenIndex[i] < seenIndex[i - 1])) {
+      findings.push(`A "${EXPECTED_ORDER[i]}" checkpoint occurs without a preceding "${EXPECTED_ORDER[i - 1]}" checkpoint.`);
     }
-    return findings;
   }
+  return findings;
+}
 
 /**
  * Cross-batch checks: patterns only visible when looking at *multiple*
@@ -109,7 +108,6 @@ export function analyzeChain(batch: BatchRecord): string[] {
 export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
   const findings: string[] = [];
   if (batches.length < 2) {
-    findings.push('Only one batch found for this manufacturer — nothing to compare across yet.');
     return findings;
   }
 
@@ -122,20 +120,20 @@ export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
     for (const cp of b.checkpoints) {
       actorTimestamps.set(cp.actor, [
         ...(actorTimestamps.get(cp.actor) ?? []),
-        { batchCode: b.batchCode, ts: cp.timestampMs },
+        { batchCode: b.objectId, ts: cp.timestampMs },
       ]);
     }
   }
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   for (const [actor, entries] of actorTimestamps) {
-    const distinctBatches = new Set(entries.map((e) => e.batchCode));
-    if (distinctBatches.size < 3) continue;
     const sorted = [...entries].sort((a, b) => a.ts - b.ts);
-    const span = sorted[sorted.length - 1].ts - sorted[0].ts;
-    if (span <= ONE_DAY_MS) {
-      findings.push(
-        `Address ${actor} recorded checkpoints on ${distinctBatches.size} different batches (${[...distinctBatches].join(', ')}) within a single day — unusually concentrated for one actor.`,
-      );
+    for (let left = 0, right = 0; right < sorted.length; right++) {
+      while (sorted[right].ts - sorted[left].ts > ONE_DAY_MS) left++;
+      const distinct = new Set(sorted.slice(left, right + 1).map(e => e.batchCode));
+      if (distinct.size >= 3) {
+        findings.push(`Address ${actor} recorded checkpoints on ${distinct.size} distinct batches within a single day.`);
+        break;
+      }
     }
   }
 
@@ -159,9 +157,6 @@ export function analyzeCrossBatch(batches: BatchRecord[]): string[] {
     );
   }
 
-  if (findings.length === 0) {
-    findings.push(`No cross-batch pattern found across ${batches.length} batches from this manufacturer.`);
-  }
 
   return findings;
 }

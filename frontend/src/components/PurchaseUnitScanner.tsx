@@ -43,21 +43,27 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
     return () => clearInterval(id);
   }, []);
 
-  const { data, isLoading, isFetched, refetch } = useSuiClientQuery(
+  const { data, isLoading, isFetched, isError: unitError, refetch } = useSuiClientQuery(
     'getObject',
     { id: unitId, options: { showContent: true } },
     { enabled: Boolean(unitId) },
   );
 
   const unit = data ? parseUnitObject(data) : null;
-  const alreadyRedeemed = Boolean(unitId) && isFetched && !isLoading && !unit;
+  const unitUnavailable = Boolean(unitId) && isFetched && !isLoading && !unitError && !unit;
+  useEffect(() => {
+    setScratchCode('');
+    setScratchCodeWrong(false);
+    setLastDigest(null);
+    setError(null);
+  }, [unitId]);
 
   // Re-check the batch's hold status independently of the Unit — a batch
   // can go on hold in the window between a Unit being minted and someone
   // paying for it, and `purchase_and_burn` re-checks this on-chain too, so
   // the UI needs to reflect the same possibility instead of just trusting
   // that a mintable-at-the-time Unit is still safe to redeem.
-  const { data: batchData } = useSuiClientQuery(
+  const { data: batchData, isFetched: batchFetched, isError: batchError } = useSuiClientQuery(
     'getObject',
     { id: unit?.batchId ?? '', options: { showContent: true } },
     { enabled: Boolean(unit?.batchId) },
@@ -105,7 +111,7 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
       {
         onSuccess: (result) => {
           setLastDigest(result.digest);
-          toast.success('Payment sent, medicine dispensed. This QR is now burned.');
+          toast.success('Payment confirmed on-chain. This sale QR has been redeemed.');
           refetch();
         },
         onError: (err) => toast.error(friendlyMoveError(err.message)),
@@ -139,7 +145,7 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
       {error && <p className="error-text">{error}</p>}
       {lastDigest && (
         <p className="success-banner">
-          Payment sent, medicine dispensed. This QR is now burned. Transaction:{' '}
+          Payment confirmed on-chain. This sale QR has been redeemed. Transaction:{' '}
           <CodeChip value={lastDigest} href={explorerTxUrl(lastDigest)} title="View on Sui Explorer" />
         </p>
       )}
@@ -159,10 +165,12 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
 
       {isLoading && unitId && <p className="helper-text">Checking this QR…</p>}
 
-      {alreadyRedeemed && (
+      {unitError && <p className="error-text">Could not read this sale QR. Check your connection and retry; its payment status is unknown.</p>}
+      {unit && (batchError || (batchFetched && !batch)) && <p className="error-text">The batch could not be verified. Check the network and contract version before paying.</p>}
+      {unitUnavailable && (
         <p className="error-text">
-          This QR has already been paid for and burned (or the ID is wrong). It cannot be
-          redeemed again — treat any medicine offered against it as unpaid/unverified.
+          No compatible sale object was found. It may have been redeemed, the ID may be wrong,
+          or it may belong to another contract version. This lookup does not establish payment status.
         </p>
       )}
 

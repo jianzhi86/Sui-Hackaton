@@ -37,7 +37,9 @@ export async function fetchAllEvents(client: EventQueryClient, moveEventType: st
       order: 'descending',
     });
     all.push(...result.data);
-    if (!result.hasNextPage || !result.nextCursor) break;
+    if (!result.hasNextPage) break;
+    if (!result.nextCursor) throw new Error('Event history is incomplete: the server did not supply the next page cursor.');
+    if (page === MAX_EVENT_PAGES - 1) throw new Error('Event history exceeds the supported range; a complete result cannot be shown.');
     cursor = result.nextCursor;
   }
   return all;

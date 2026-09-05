@@ -37,6 +37,7 @@ function gonkaDevProxy(env: Record<string, string>): Plugin {
             const baseUrl = env.GONKA_BASE_URL || 'https://api.gonkarouter.io/v1';
             const upstream = await fetch(`${baseUrl}/chat/completions`, {
               method: 'POST',
+              signal: AbortSignal.timeout(120_000),
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${apiKey}`,

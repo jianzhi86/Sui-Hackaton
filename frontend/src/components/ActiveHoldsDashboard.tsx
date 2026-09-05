@@ -1,6 +1,6 @@
 import { useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
-import { PACKAGE_ID } from '../lib/network';
+import { TYPE_PACKAGE_ID } from '../lib/network';
 import { computeActiveHolds, fetchAllEvents } from '../lib/activeHolds';
 import { CategoryBadge, SeverityBadge } from './HoldControl';
 import { CodeChip } from './CodeChip';
@@ -23,12 +23,12 @@ interface ActiveHoldsDashboardProps {
 export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProps) {
   const client = useSuiClient();
 
-  const { data, isLoading, isError, isFetching, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ['activeHolds', PACKAGE_ID],
+  const { data, isLoading, isError, error, isFetching, refetch, dataUpdatedAt } = useQuery({
+    queryKey: ['activeHolds', TYPE_PACKAGE_ID],
     queryFn: async () => {
       const [held, released] = await Promise.all([
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchHeld`),
-        fetchAllEvents(client, `${PACKAGE_ID}::batch::BatchReleased`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchHeld`),
+        fetchAllEvents(client, `${TYPE_PACKAGE_ID}::batch::BatchReleased`),
       ]);
       return computeActiveHolds(held, released);
     },
@@ -62,7 +62,7 @@ export function ActiveHoldsDashboard({ onSelectBatch }: ActiveHoldsDashboardProp
       </div>
 
       {isLoading && <p className="helper-text">Reading hold events from Sui…</p>}
-      {isError && <p className="error-text">Could not read hold events from Sui. Try again shortly.</p>}
+      {isError && <p className="error-text">{error instanceof Error ? error.message : 'Could not read hold events from Sui.'}</p>}
 
       {!isLoading && !isError && activeHolds.length === 0 && (
         <p className="success-banner">No batches are currently on hold.</p>

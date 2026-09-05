@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useSuiClientQuery } from '@mysten/dapp-kit';
 import { parseBatchObject } from '../lib/suiRead';
 import type { AnomalyReportResult, BatchRecord } from '../lib/types';
@@ -76,9 +76,15 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
   // report's conclusions no longer describe the current batch — clear it
   // rather than let a stale "no checkpoints yet" verdict sit next to a
   // ledger that now has one.
-  const batchFingerprint = batch
-    ? `${batch.checkpoints.length}:${batch.isHeld}:${batch.holdHistory.length}`
-    : null;
+  const batchFingerprint = batch ? JSON.stringify(batch) : null;
+  const currentFingerprint = useRef(batchFingerprint);
+  currentFingerprint.current = batchFingerprint;
+  const requestVersion = useRef(0);
+  useEffect(() => {
+    requestVersion.current++;
+    setChecking(false);
+    return () => { requestVersion.current++; };
+  }, [queryId]);
   const [lastReportFingerprint, setLastReportFingerprint] = useState<string | null>(null);
   const [reportInvalidated, setReportInvalidated] = useState(false);
   useEffect(() => {
@@ -86,32 +92,36 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
       setReport(null);
       setReportInvalidated(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batchFingerprint]);
+  }, [batchFingerprint, report, lastReportFingerprint]);
 
   function handleLookup(e: FormEvent) {
     e.preventDefault();
     setReport(null);
     setReportInvalidated(false);
-    setSerial(null);
+    if (batchId.trim() !== queryId) setSerial(null);
     setQueryId(batchId.trim());
+    if (batchId.trim() === queryId) refetch();
   }
 
   async function handleCheckAnomaly() {
     if (!batch) return;
+    const version = ++requestVersion.current;
     setChecking(true);
     try {
       const result = await checkAnomaly(batch);
+      if (version !== requestVersion.current || currentFingerprint.current !== batchFingerprint) return;
       setReport(result);
       setLastReportFingerprint(batchFingerprint);
       setReportInvalidated(false);
       if (result.models.length === 0) {
-        toast.error('Gonka Router was unreachable — showing rule-based findings only.');
+        toast.error('No valid model responses — showing rule-based findings only.');
+      } else if (result.models.length === 1) {
+        toast.error('Only one model responded; independent verification is incomplete.');
       } else {
         toast.success('AI verification complete.');
       }
     } finally {
-      setChecking(false);
+      if (version === requestVersion.current) setChecking(false);
     }
   }
 
@@ -125,6 +135,8 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
 
       <QrScanButton
         onDecoded={(text) => {
+          setReport(null);
+          setQueryId(extractBatchId(text));
           setBatchId(extractBatchId(text));
           setSerial(extractSerial(text));
         }}
@@ -136,7 +148,7 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
           <input
             id="lookupId"
             value={batchId}
-            onChange={(e) => setBatchId(e.target.value)}
+            onChange={(e) => { setBatchId(e.target.value); setSerial(null); }}
             placeholder="0x…"
           />
         </div>
@@ -154,8 +166,7 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
       )}
       {isFetched && !isLoading && !isError && !batch && queryId && (
         <p className="error-text">
-          No batch found at that ID. This exact serial does not exist on-chain — treat the
-          product as unverified and do not use it.
+          No compatible batch found. Check the ID, network and contract version. A label number alone does not prove an item is registered.
         </p>
       )}
 
@@ -264,9 +275,9 @@ export function BatchLookup({ initialBatchId, initialSerial }: BatchLookupProps)
 
           {report && <AnomalyPanel report={report} />}
 
-          <CrossBatchPanel batch={batch} />
+          <CrossBatchPanel key={batch.objectId} batch={batch} />
 
-          <ItemQrSheet batchId={batch.objectId} batchCode={batch.batchCode} />
+          <ItemQrSheet key={batch.objectId} batchId={batch.objectId} batchCode={batch.batchCode} />
         </div>
       )}
     </section>

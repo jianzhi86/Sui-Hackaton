@@ -41,6 +41,7 @@ interface RawModelResponse {
 async function callGonkaModel(model: string, prompt: string): Promise<RawModelResponse> {
   const res = await fetch('/api/gonka', {
     method: 'POST',
+    signal: AbortSignal.timeout(125_000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
@@ -76,7 +77,7 @@ async function callGonkaModel(model: string, prompt: string): Promise<RawModelRe
   return { requestId, content };
 }
 
-function parseModelJson(model: string, requestId: string, raw: string): ModelVerdict {
+export function parseModelJson(model: string, requestId: string, raw: string): ModelVerdict | null {
   try {
     // Reasoning-capable models (confirmed live against gonkarouter.io: this
     // is exactly what MiniMax-M2.7 does) prepend a `<think>...</think>`
@@ -100,24 +101,22 @@ function parseModelJson(model: string, requestId: string, raw: string): ModelVer
     }
 
     const parsed = JSON.parse(cleaned);
-    const riskScore = Math.max(0, Math.min(100, Number(parsed.risk_score) || 0));
-    const verdict: 'clear' | 'flag' = parsed.verdict === 'flag' ? 'flag' : 'clear';
-    return {
-      model,
-      requestId,
-      riskScore,
-      verdict,
-      reasoning: String(parsed.reasoning ?? 'No reasoning returned.'),
-    };
-  } catch {
-    return {
-      model,
-      requestId,
-      riskScore: 50,
-      verdict: 'flag',
-      reasoning: `Response could not be parsed as JSON, showing raw output: ${raw.slice(0, 200)}`,
-    };
-  }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        !Number.isInteger(parsed.risk_score) || parsed.risk_score < 0 || parsed.risk_score > 100 ||
+        !['clear', 'flag'].includes(parsed.verdict) ||
+        typeof parsed.reasoning !== 'string' || !parsed.reasoning.trim()) return null;
+    return { model, requestId, riskScore: parsed.risk_score, verdict: parsed.verdict, reasoning: parsed.reasoning };
+  } catch { return null; }
+}
+
+export function summarizeReport(ruleFindings: string[], models: ModelVerdict[]): AnomalyReportResult {
+  const flags = models.filter(m => m.verdict === 'flag').length;
+  const consensus: AnomalyReportResult['consensus'] = ruleFindings.length > 0 ? 'flag'
+    : models.length === 0 ? 'unavailable'
+    : models.length < 2 || new Set(models.map(m => m.model)).size < 2 ? 'needs_review'
+    : flags === models.length ? 'flag' : flags > 0 ? 'needs_review' : 'clear';
+  return { ruleFindings, models, consensus, combinedRiskScore: models.length
+    ? Math.round(models.reduce((sum, m) => sum + m.riskScore, 0) / models.length) : null };
 }
 
 function buildPrompt(batch: BatchRecord, ruleFindings: string[]): string {
@@ -136,8 +135,9 @@ function buildPrompt(batch: BatchRecord, ruleFindings: string[]): string {
     `Batch code: ${batch.batchCode}`,
     `Manufacturer address: ${batch.manufacturer}`,
     `Created: ${new Date(batch.createdAtMs).toISOString()}`,
+    `Expires: ${new Date(batch.expiryMs).toISOString()}`,
     '',
-    'Custody timeline (in recorded order):',
+    'Custody timeline (in recorded order; manufacturer registration precedes these checkpoints):',
     timeline,
     '',
     'Automated rule-based findings for this chain:',
@@ -170,34 +170,14 @@ export async function checkAnomaly(batch: BatchRecord): Promise<AnomalyReportRes
   settled.forEach((result, i) => {
     const modelName = i === 0 ? MODEL_A : MODEL_B;
     if (result.status === 'fulfilled') {
-      models.push(parseModelJson(modelName, result.value.requestId, result.value.content));
+      const parsed = parseModelJson(modelName, result.value.requestId, result.value.content);
+      if (parsed) models.push(parsed);
     } else {
       console.error(`Gonka Router call to ${modelName} failed:`, result.reason);
     }
   });
 
-  if (models.length === 0) {
-    return {
-      ruleFindings,
-      models: [],
-      consensus: ruleFindings.length > 0 ? 'flag' : 'unavailable',
-      combinedRiskScore: null,
-    };
-  }
-
-  const flags = models.filter((m) => m.verdict === 'flag').length;
-  const consensus: AnomalyReportResult['consensus'] =
-    models.length === 2 && flags === 1
-      ? 'needs_review'
-      : flags === models.length
-        ? 'flag'
-        : 'clear';
-
-  const combinedRiskScore = Math.round(
-    models.reduce((sum, m) => sum + m.riskScore, 0) / models.length,
-  );
-
-  return { ruleFindings, models, consensus, combinedRiskScore };
+  return summarizeReport(ruleFindings, models);
 }
 
 function buildCrossBatchPrompt(batches: BatchRecord[], ruleFindings: string[]): string {
@@ -245,6 +225,7 @@ function buildCrossBatchPrompt(batches: BatchRecord[], ruleFindings: string[]): 
  */
 export async function checkCrossBatchAnomaly(batches: BatchRecord[]): Promise<AnomalyReportResult> {
   const ruleFindings = analyzeCrossBatch(batches);
+  if (batches.length < 2) return summarizeReport([], []);
   const prompt = buildCrossBatchPrompt(batches, ruleFindings);
 
   const settled = await Promise.allSettled([
@@ -256,32 +237,12 @@ export async function checkCrossBatchAnomaly(batches: BatchRecord[]): Promise<An
   settled.forEach((result, i) => {
     const modelName = i === 0 ? MODEL_A : MODEL_B;
     if (result.status === 'fulfilled') {
-      models.push(parseModelJson(modelName, result.value.requestId, result.value.content));
+      const parsed = parseModelJson(modelName, result.value.requestId, result.value.content);
+      if (parsed) models.push(parsed);
     } else {
       console.error(`Gonka Router cross-batch call to ${modelName} failed:`, result.reason);
     }
   });
 
-  if (models.length === 0) {
-    return {
-      ruleFindings,
-      models: [],
-      consensus: ruleFindings.length > 0 && batches.length >= 2 ? 'flag' : 'unavailable',
-      combinedRiskScore: null,
-    };
-  }
-
-  const flags = models.filter((m) => m.verdict === 'flag').length;
-  const consensus: AnomalyReportResult['consensus'] =
-    models.length === 2 && flags === 1
-      ? 'needs_review'
-      : flags === models.length
-        ? 'flag'
-        : 'clear';
-
-  const combinedRiskScore = Math.round(
-    models.reduce((sum, m) => sum + m.riskScore, 0) / models.length,
-  );
-
-  return { ruleFindings, models, consensus, combinedRiskScore };
+  return summarizeReport(ruleFindings, models);
 }
