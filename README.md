@@ -3,7 +3,7 @@
 A Sui + AI project built for a hackathon, targeting:
 
 - **Sui Track 02 — AI × Sui** (primary): on-chain ownership/custody, payments, and AI-driven verification in one product.
-- **Gonka "AI for Society"** (secondary submission): the AI cross-check below satisfies Gonka Router's full mandatory checklist — multi-model consensus, a Truth-Score-equivalent, a reasoning trail, and visible Gonka Request IDs.
+- **Gonka "AI for Society"** (mentioned, not a primary submission): the AI cross-check below runs on Gonka Router and shares some of that track's mechanics — multi-model consensus, a Truth-Score-equivalent, a reasoning trail, visible Gonka Request IDs — but Gonka's actual rubric wants a generic "paste a URL/tweet/text → verification report" fact-checker, and this app verifies a pharma custody timeline, not an arbitrary claim. Listed here for transparency about what's actually built, not as a competitive Gonka entry.
 
 **The pitch in one line:** blockchain proves custody, single-use QR codes prove a sale can't be double-charged or replayed, and independent AI models catch what looks cloned or tampered.
 
