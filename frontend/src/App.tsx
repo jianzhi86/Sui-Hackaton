@@ -57,7 +57,7 @@ export default function App() {
     }
   }, []);
 
-  function handleSelectBatchFromHolds(batchId: string) {
+  function handleSelectBatch(batchId: string) {
     setInitialBatchId(batchId);
     setInitialSerial(undefined);
     setTab('verify');
@@ -66,13 +66,13 @@ export default function App() {
   return (
     <div className="app-shell">
       <Header active={tab} onNavigate={setTab} />
-      {tab === 'register' && <RegisterBatchForm />}
+      {tab === 'register' && <RegisterBatchForm onSelectBatch={handleSelectBatch} />}
       <Suspense fallback={<TabFallback />}>
         {tab === 'scan' && <CheckpointScanner />}
         {tab === 'verify' && <BatchLookup initialBatchId={initialBatchId} initialSerial={initialSerial} />}
         {tab === 'mint' && <MintUnitForm />}
         {tab === 'pay' && <PurchaseUnitScanner initialUnitId={initialUnitId} />}
-        {tab === 'holds' && <ActiveHoldsDashboard onSelectBatch={handleSelectBatchFromHolds} />}
+        {tab === 'holds' && <ActiveHoldsDashboard onSelectBatch={handleSelectBatch} />}
         {tab === 'stats' && <StatsDashboard />}
       </Suspense>
     </div>

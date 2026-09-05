@@ -9,6 +9,7 @@ import { QrCodeCard } from './QrCodeCard';
 import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
 import { ConnectWalletBanner } from './ConnectWalletBanner';
+import { MyBatchesPanel } from './MyBatchesPanel';
 import { explorerTxUrl } from '../lib/explorer';
 import { mistPreview } from '../lib/formatSui';
 
@@ -16,6 +17,10 @@ interface CreatedObjectChange {
   type: string;
   objectId?: string;
   objectType?: string;
+}
+
+interface RegisterBatchFormProps {
+  onSelectBatch: (batchId: string) => void;
 }
 
 /** Default expiry offset for the date input: two years out, a reasonable
@@ -31,7 +36,7 @@ function todayDateInput(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function RegisterBatchForm() {
+export function RegisterBatchForm({ onSelectBatch }: RegisterBatchFormProps) {
   const account = useCurrentAccount();
   const { mutate: signAndExecute, isPending } = useSignAndExecute();
   const toast = useToast();
@@ -236,6 +241,8 @@ export function RegisterBatchForm() {
           </button>
         </div>
       )}
+
+      <MyBatchesPanel onSelectBatch={onSelectBatch} />
     </section>
   );
 }
