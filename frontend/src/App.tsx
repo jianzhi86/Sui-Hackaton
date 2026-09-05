@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Header } from './components/Header';
 import { RegisterBatchForm } from './components/RegisterBatchForm';
+import { NetworkWarningBanner } from './components/NetworkWarningBanner';
 
 // Code-split every tab except the default ("register") one — each pulls
 // in dependencies (html5-qrcode for scanning, the Gonka/cross-batch AI
@@ -66,6 +67,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <Header active={tab} onNavigate={setTab} />
+      <NetworkWarningBanner />
       {tab === 'register' && <RegisterBatchForm onSelectBatch={handleSelectBatch} />}
       <Suspense fallback={<TabFallback />}>
         {tab === 'scan' && <CheckpointScanner />}

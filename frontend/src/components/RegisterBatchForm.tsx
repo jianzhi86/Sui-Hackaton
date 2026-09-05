@@ -5,6 +5,7 @@ import { MIST_PER_SUI } from '@mysten/sui/utils';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import { QrCodeCard } from './QrCodeCard';
 import { ItemQrSheet } from './ItemQrSheet';
 import { CodeChip } from './CodeChip';
@@ -116,7 +117,7 @@ export function RegisterBatchForm({ onSelectBatch }: RegisterBatchFormProps) {
             console.log('Transaction result:', result);
           }
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }

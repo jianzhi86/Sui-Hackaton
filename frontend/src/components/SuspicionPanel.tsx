@@ -6,6 +6,7 @@ import { MIST_PER_SUI } from '@mysten/sui/utils';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, MIN_SUSPICION_BOND_MIST, PACKAGE_ID, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import { fetchAllEvents } from '../lib/activeHolds';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
@@ -114,7 +115,7 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
           setNote('');
           refetch();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -132,7 +133,7 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
           toast.success('Report confirmed — bond refunded to the reporter.');
           refetch();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -153,7 +154,7 @@ export function SuspicionPanel({ batchId }: SuspicionPanelProps) {
           toast.success('Report rejected — bond forfeited to you.');
           refetch();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }

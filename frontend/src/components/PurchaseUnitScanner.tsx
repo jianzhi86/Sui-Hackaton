@@ -7,6 +7,7 @@ import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { parseBatchObject, parseUnitObject } from '../lib/suiRead';
 import { extractUnitId } from '../lib/qr';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import { sha256Hex, utf8Bytes } from '../lib/secret';
 import { CodeChip } from './CodeChip';
 import { ConnectWalletBanner } from './ConnectWalletBanner';
@@ -107,7 +108,7 @@ export function PurchaseUnitScanner({ initialUnitId }: PurchaseUnitScannerProps)
           toast.success('Payment sent, medicine dispensed. This QR is now burned.');
           refetch();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }

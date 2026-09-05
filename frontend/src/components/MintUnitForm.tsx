@@ -6,6 +6,7 @@ import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { parseBatchObject } from '../lib/suiRead';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import { generateSecret, sha256Bytes } from '../lib/secret';
 import { QrCodeCard } from './QrCodeCard';
 import { CodeChip } from './CodeChip';
@@ -102,7 +103,7 @@ export function MintUnitForm() {
             console.log('Transaction result:', result);
           }
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }

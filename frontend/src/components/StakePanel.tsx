@@ -5,6 +5,7 @@ import { MIST_PER_SUI } from '@mysten/sui/utils';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import type { BatchRecord } from '../lib/types';
 import { mistPreview } from '../lib/formatSui';
 
@@ -67,7 +68,7 @@ export function StakePanel({ batch, onChanged }: StakePanelProps) {
           setTopUpSui('');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -86,7 +87,7 @@ export function StakePanel({ batch, onChanged }: StakePanelProps) {
           toast.success('Stake withdrawn back to the manufacturer.');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }

@@ -4,6 +4,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import { CodeChip } from './CodeChip';
 import { explorerAddressUrl } from '../lib/explorer';
 import { ConnectWalletBanner } from './ConnectWalletBanner';
@@ -197,7 +198,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           toast.success('Hold placed. Sales and checkpoints are now blocked for this batch.');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -230,7 +231,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           toast.success('Hold released.');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -263,7 +264,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           toast.success('Release proposed. Waiting on a second, different regulator to confirm.');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -287,7 +288,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           toast.success('Release confirmed. This hold is now lifted.');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -308,7 +309,7 @@ export function HoldControl({ batch, onChanged }: HoldControlProps) {
           toast.success('Hold flagged as overdue for review — recorded on-chain, permanently.');
           onChanged();
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }

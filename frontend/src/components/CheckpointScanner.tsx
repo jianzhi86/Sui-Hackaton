@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClientQuery } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { CLOCK_OBJECT_ID, DEFAULT_NETWORK, TEMPERATURE_OFFSET_C, target } from '../lib/network';
 import { useSignAndExecute } from '../lib/useSignAndExecute';
 import { QrScanButton } from './QrScanButton';
 import { extractBatchId } from '../lib/qr';
+import { parseBatchObject } from '../lib/suiRead';
 import { useToast } from '../lib/toast';
+import { friendlyMoveError } from '../lib/moveErrors';
 import { CodeChip } from './CodeChip';
 import { ConnectWalletBanner } from './ConnectWalletBanner';
 import { explorerTxUrl } from '../lib/explorer';
@@ -27,12 +29,26 @@ export function CheckpointScanner() {
   const [error, setError] = useState<string | null>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
 
+  // Checked purely so the form can warn before a doomed transaction —
+  // `add_checkpoint` re-checks `is_held` on-chain regardless (abort code 2),
+  // so this is UX, not the actual safety boundary.
+  const { data: batchData } = useSuiClientQuery(
+    'getObject',
+    { id: batchId.trim(), options: { showContent: true } },
+    { enabled: Boolean(batchId.trim()) },
+  );
+  const batch = batchData ? parseBatchObject(batchData) : null;
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
     if (!batchId.trim() || !location.trim()) {
       setError('Batch object ID and location are both required.');
+      return;
+    }
+    if (batch?.isHeld) {
+      setError('This batch is on hold — checkpoints can\'t be added until the hold is released.');
       return;
     }
 
@@ -76,7 +92,7 @@ export function CheckpointScanner() {
           setNote('');
           setTemperatureC('');
         },
-        onError: (err) => toast.error(err.message),
+        onError: (err) => toast.error(friendlyMoveError(err.message)),
       },
     );
   }
@@ -92,6 +108,12 @@ export function CheckpointScanner() {
 
       {!account && <ConnectWalletBanner action="record a checkpoint" />}
       {error && <p className="error-text">{error}</p>}
+      {batch?.isHeld && (
+        <p className="error-text">
+          🚫 This batch is currently on hold ({batch.holdReason || 'no reason given'}) — new
+          checkpoints are blocked on-chain until the hold is released.
+        </p>
+      )}
       {lastDigest && (
         <p className="success-banner">
           Checkpoint recorded. Transaction:{' '}
@@ -181,7 +203,7 @@ export function CheckpointScanner() {
           )}
         </div>
 
-        <button type="submit" className="btn btn-primary" disabled={!account || isPending}>
+        <button type="submit" className="btn btn-primary" disabled={!account || isPending || Boolean(batch?.isHeld)}>
           {isPending ? 'Recording on-chain…' : 'Record checkpoint'}
         </button>
       </form>
