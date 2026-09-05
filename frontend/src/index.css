@@ -60,7 +60,7 @@ a:focus-visible {
 }
 
 .app-shell {
-  max-width: 880px;
+  max-width: 1040px;
   margin: 0 auto;
   padding: 20px 20px 64px;
 }
@@ -145,6 +145,12 @@ a:focus-visible {
   transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+@media (min-width: 641px) {
+  .tab-button {
+    padding: 7px 10px;
+  }
 }
 
 @media (max-width: 640px) {

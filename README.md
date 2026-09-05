@@ -7,6 +7,35 @@ A Sui + AI project built for a hackathon, targeting:
 
 **The pitch in one line:** blockchain proves custody, single-use QR codes prove a sale can't be double-charged or replayed, and independent AI models catch what looks cloned or tampered.
 
+## Problem statement
+
+Counterfeit and diverted medicines cause real harm and are extremely hard to catch with paper or siloed-database records: a paper trail can be forged, a private database can be edited after the fact by whoever controls it, and neither gives a patient or pharmacist any way to independently check a package's history before use. Cold-chain excursions (a temperature-sensitive drug left too warm/cold in transit) are similarly self-reported and easy to hide after the fact. PharmaTrust addresses this by making the entire custody chain — manufacture, every hand-off, every hold/recall, every sale — a public, tamper-evident, permanently attributed record on Sui, plus an independent AI layer that reasons over that record for patterns a human skimming a spreadsheet would miss.
+
+## Smart contract (Sui Testnet)
+
+| | |
+|---|---|
+| Network | Sui Testnet |
+| Package ID | `0x2ad954373a0b57537f1af6c392a2585ec6db1cf29a85bb2d3a87ff8eb264327a` |
+| Module | `pharma_track::batch` |
+| Explorer | https://suiscan.xyz/testnet/object/0x2ad954373a0b57537f1af6c392a2585ec6db1cf29a85bb2d3a87ff8eb264327a |
+
+## Live demo
+
+- App: https://sui-hackaton-one.vercel.app/
+- Repo: https://github.com/jianzhi86/Sui-Hackaton
+
+## Team
+
+- <!-- TODO: add team member names/handles here -->
+
+## AI tools used
+
+Declared per submission requirements — both AI usage *in* the product and AI usage *building* the product:
+
+- **Product feature (runtime AI)**: [Gonka Router](https://gonkarouter.io) — two independently-queried hosted models (`MiniMaxAI/MiniMax-M2.7` and `deepseek-ai/DeepSeek-V4-Flash-0731`) reason over each batch's on-chain custody timeline and flag anomalies; see `src/lib/gonka.ts` and `api/gonka.ts`.
+- **Development tool**: [Claude Code](https://claude.com/claude-code) (Anthropic) was used throughout development for pair-programming on the Move contract, the React/Vite frontend, debugging, and this README.
+
 **No wallet is locked out of anything.** Every entry function — registering a batch, minting a sale QR, placing a hold, confirming a suspicion report — is callable by any connected wallet, with no allow-list or admin approval step anywhere. An earlier version gated these behind per-role registries (manufacturer/pharmacy/regulator/admin); that closed real impersonation gaps, but also meant a fresh wallet couldn't do anything until an existing admin added it, which is the wrong tradeoff for something anyone should be able to pick up and try immediately. See "Design decisions" below for the actual tradeoff this makes.
 
 ## What it does
