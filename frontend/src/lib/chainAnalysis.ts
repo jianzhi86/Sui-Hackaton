@@ -93,12 +93,10 @@ export function analyzeChain(batch: BatchRecord): string[] {
     if (seenIndex[i] !== -1 && seenIndex[i - 1] === -1) {
       findings.push(
         `A "${EXPECTED_ORDER[i]}" checkpoint exists but "${EXPECTED_ORDER[i - 1]}" was never recorded — a step in the expected chain appears to be missing.`,
-      );
+    );
+    }
     }
   }
-
-  return findings;
-}
 
 /**
  * Cross-batch checks: patterns only visible when looking at *multiple*
